@@ -43,6 +43,9 @@ public partial class GraphCanvas : GraphEdit
     private readonly Dictionary<long, DocNode> _ids = new();
     private readonly Dictionary<GraphNode, string> _builtPaths = new();
     private readonly Dictionary<DocNode, Control> _rows = new();
+    private readonly HashSet<DocNode> _collapsed = new();
+    // Where every card has been, including ones hidden by collapsing, so they come back to the same place.
+    private readonly Dictionary<DocNode, Vector2> _known = new();
     private int _nextCardId;
     private string _title = "";
 
@@ -277,6 +280,8 @@ public partial class GraphCanvas : GraphEdit
     public void ShowDocument(Document doc, string title, LayoutStore.Saved? saved)
     {
         _title = title;
+        _collapsed.Clear();
+        _known.Clear();
         Clear();
         BuildCard(doc.Root, title);
         AutoLayout();
@@ -299,7 +304,9 @@ public partial class GraphCanvas : GraphEdit
     {
         if (Editor == null)
             return;
-        var positions = _cards.ToDictionary(kv => kv.Key, kv => kv.Value.PositionOffset);
+        foreach (var (node, card) in _cards)
+            _known[node] = card.PositionOffset;
+        var positions = _known;
         // Text applied from the text pane brings all-new nodes, so fall back to matching by path.
         // Those old nodes are detached by now, so use the paths they had when their cards were built.
         var byPath = _cards.ToDictionary(kv => _builtPaths[kv.Value], kv => kv.Value.PositionOffset);
@@ -317,7 +324,8 @@ public partial class GraphCanvas : GraphEdit
 
         void PlaceCard(DocNode node)
         {
-            var card = _cards[node];
+            if (!_cards.TryGetValue(node, out var card))
+                return;
             if (positions.TryGetValue(node, out var pos) || byPath.TryGetValue(node.Path, out pos))
             {
                 card.PositionOffset = pos;
@@ -329,6 +337,16 @@ public partial class GraphCanvas : GraphEdit
             foreach (var child in node.Children.Where(c => c.IsContainer))
                 PlaceCard(child);
         }
+    }
+
+    /// <summary>Zooms and scrolls so every card is in view.</summary>
+    public void FitToView()
+    {
+        if (_cards.Count == 0)
+            return;
+        var bounds = _cards.Values.Select(c => new Rect2(c.PositionOffset, c.Size)).Aggregate((a, b) => a.Merge(b)).Grow(40);
+        Zoom = Math.Clamp(Math.Min(Size.X / bounds.Size.X, Size.Y / bounds.Size.Y), ZoomMin, 1f);
+        ScrollOffset = bounds.Position * Zoom - (Size - bounds.Size * Zoom) / 2;
     }
 
     /// <summary>How far down a card its row starts. Worked out from sizes, since rows aren't laid out until the next frame.</summary>
@@ -396,7 +414,7 @@ public partial class GraphCanvas : GraphEdit
         {
             var card = _cards[node];
             var top = nextY;
-            var children = node.Children.Where(c => c.IsContainer).ToList();
+            var children = node.Children.Where(c => _cards.ContainsKey(c)).ToList();
             foreach (var child in children)
                 Place(child, depth + 1);
 
@@ -431,6 +449,19 @@ public partial class GraphCanvas : GraphEdit
             TooltipText = node.Comment,
             Resizable = false,
         };
+        var collapsed = _collapsed.Contains(node);
+        if (node.Children.Count > 0)
+        {
+            var toggle = new Button { Text = collapsed ? "▸" : "▾", Flat = true, TooltipText = collapsed ? "Expand" : "Collapse", FocusMode = FocusModeEnum.None };
+            toggle.Pressed += () =>
+            {
+                if (!_collapsed.Remove(node))
+                    _collapsed.Add(node);
+                Refresh();
+            };
+            card.GetTitlebarHBox().AddChild(toggle);
+            card.GetTitlebarHBox().MoveChild(toggle, 0);
+        }
         card.GetTitlebarHBox().AddChild(Badge(Palette.KindLabel(node), Palette.KindColor(node)));
         card.GuiInput += e =>
         {
@@ -448,7 +479,7 @@ public partial class GraphCanvas : GraphEdit
         card.SetSlot(0, node.Parent != null, 0, Palette.KindColor(node), false, 0, Colors.White);
 
         var rightPort = 0;
-        foreach (var child in node.Children)
+        foreach (var child in collapsed ? Enumerable.Empty<DocNode>() : node.Children)
         {
             var row = child.IsContainer ? ContainerRow(child) : ValueRow(child);
             row.TooltipText = child.Comment;
@@ -575,7 +606,8 @@ public partial class GraphCanvas : GraphEdit
         ? $"{node.Parent.Key ?? ""}[{node.IndexInParent}]"
         : node.Key ?? "";
 
-    private static string Summary(DocNode node) => $"{Palette.Count(node)}  ·  {node.Path}";
+    private string Summary(DocNode node) =>
+        $"{Palette.Count(node)}{(_collapsed.Contains(node) ? " (collapsed)" : "")}  ·  {node.Path}";
 
     private static int Depth(DocNode node)
     {

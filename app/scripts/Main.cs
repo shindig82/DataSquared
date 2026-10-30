@@ -55,6 +55,11 @@ public partial class Main : Control
 
     private void BuildUi()
     {
+        Theme = AppTheme.Build();
+        var background = new ColorRect { Color = AppTheme.Panel };
+        background.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+        AddChild(background);
+
         var root = new VBoxContainer();
         root.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         root.AddThemeConstantOverride("separation", 0);
@@ -89,6 +94,7 @@ public partial class Main : Control
         toolbar.AddChild(_redoButton);
         toolbar.AddChild(new VSeparator());
         toolbar.AddChild(ToolButton("Auto layout", Key.L, false, () => _canvas.AutoLayout()));
+        toolbar.AddChild(ToolButton("Fit", Key.Key0, false, () => _canvas.FitToView()));
         toolbar.AddChild(new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill });
         _search = new SearchBar();
         _search.Jump += node =>
