@@ -7,13 +7,16 @@ using Godot;
 
 namespace DataSquared;
 
-/// <summary>The main window: toolbar, card canvas, a live preview of the file, and a status bar.</summary>
+/// <summary>The main window: toolbar, node tree, card canvas, the file as text, and a status bar.</summary>
 public partial class Main : Control
 {
     private const string FileFilters = "*.json, *.cfg, *.ini ; Data files";
 
+    private NodeTree _tree = null!;
     private GraphCanvas _canvas = null!;
-    private CodeEdit _preview = null!;
+    private TextPane _text = null!;
+    private SearchBar _search = null!;
+    private PopupMenu _newMenu = null!;
     private Label _status = null!;
     private FileDialog _openDialog = null!;
     private FileDialog _saveDialog = null!;
@@ -52,6 +55,11 @@ public partial class Main : Control
 
     private void BuildUi()
     {
+        Theme = AppTheme.Build();
+        var background = new ColorRect { Color = AppTheme.Panel };
+        background.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+        AddChild(background);
+
         var root = new VBoxContainer();
         root.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         root.AddThemeConstantOverride("separation", 0);
@@ -63,6 +71,16 @@ public partial class Main : Control
         toolbarPanel.AddChild(toolbar);
         root.AddChild(toolbarPanel);
 
+        _newMenu = new PopupMenu();
+        _newMenu.AddItem("New JSON file", 0);
+        _newMenu.AddItem("New INI file", 1);
+        _newMenu.IdPressed += id => ConfirmDiscard(() => New(id == 0 ? DocumentFormat.Json : DocumentFormat.Ini));
+        AddChild(_newMenu);
+        toolbar.AddChild(ToolButton("New", Key.N, false, () =>
+        {
+            _newMenu.Position = DisplayServer.MouseGetPosition();
+            _newMenu.Popup();
+        }));
         toolbar.AddChild(ToolButton("Open", Key.O, false, () => ConfirmDiscard(() => _openDialog.PopupCentered(new Vector2I(900, 600)))));
         toolbar.AddChild(ToolButton("Save", Key.S, false, Save));
         toolbar.AddChild(ToolButton("Save As", Key.S, true, () => _saveDialog.PopupCentered(new Vector2I(900, 600))));
@@ -76,21 +94,34 @@ public partial class Main : Control
         toolbar.AddChild(_redoButton);
         toolbar.AddChild(new VSeparator());
         toolbar.AddChild(ToolButton("Auto layout", Key.L, false, () => _canvas.AutoLayout()));
+        toolbar.AddChild(ToolButton("Fit", Key.Key0, false, () => _canvas.FitToView()));
+        toolbar.AddChild(new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill });
+        _search = new SearchBar();
+        _search.Jump += node =>
+        {
+            _canvas.FocusNode(node);
+            _tree.SelectNode(node);
+        };
+        toolbar.AddChild(_search);
 
-        var split = new HSplitContainer { SizeFlagsVertical = SizeFlags.ExpandFill };
-        root.AddChild(split);
+        var outer = new HSplitContainer { SizeFlagsVertical = SizeFlags.ExpandFill };
+        root.AddChild(outer);
+
+        _tree = new NodeTree { CustomMinimumSize = new Vector2(280, 0) };
+        _tree.NodePicked += node => _canvas.FocusNode(node);
+        outer.AddChild(_tree);
+
+        var inner = new HSplitContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        outer.AddChild(inner);
 
         _canvas = new GraphCanvas { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsStretchRatio = 3 };
-        split.AddChild(_canvas);
+        _canvas.Problem += ShowError;
+        _canvas.CardSelected += node => _tree.SelectNode(node);
+        inner.AddChild(_canvas);
 
-        _preview = new CodeEdit
-        {
-            Editable = false,
-            GuttersDrawLineNumbers = true,
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(360, 0),
-        };
-        split.AddChild(_preview);
+        _text = new TextPane { SizeFlagsHorizontal = SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(360, 0) };
+        _text.Applied += () => _canvas.Refresh();
+        inner.AddChild(_text);
 
         var statusPanel = new PanelContainer();
         _status = new Label { Text = "" };
@@ -131,23 +162,35 @@ public partial class Main : Control
         return button;
     }
 
+    private void New(DocumentFormat format)
+    {
+        var doc = Document.Parse(format == DocumentFormat.Json ? "{}\n" : "", format);
+        Show(doc, null, format == DocumentFormat.Json ? "Untitled.json" : "Untitled.ini", null);
+    }
+
     private void Open(string path)
     {
         try
         {
-            var doc = Document.Load(path);
-            _editor = new DocumentEditor(doc);
-            _editor.Changed += OnChanged;
-            _path = path;
-            _canvas.Editor = _editor;
-            _canvas.ShowDocument(doc, Path.GetFileName(path), LayoutStore.Load(path));
-            RefreshPreview();
-            UpdateChrome();
+            Show(Document.Load(path), path, Path.GetFileName(path), LayoutStore.Load(path));
         }
         catch (Exception e) when (e is IOException or FormatException or UnauthorizedAccessException)
         {
             ShowError($"Couldn't open {Path.GetFileName(path)}.\n\n{e.Message}");
         }
+    }
+
+    private void Show(Document doc, string? path, string title, LayoutStore.Saved? layout)
+    {
+        _editor = new DocumentEditor(doc);
+        _editor.Changed += OnChanged;
+        _path = path;
+        _canvas.Editor = _editor;
+        _canvas.ShowDocument(doc, title, layout);
+        _tree.ShowDocument(doc, title);
+        _text.ShowDocument(_editor);
+        _search.ShowDocument(doc);
+        UpdateChrome();
     }
 
     private void Save()
@@ -182,8 +225,17 @@ public partial class Main : Control
     {
         if (e is not InputEventKey { Pressed: true } key || !key.IsCommandOrControlPressed())
             return;
+        if (key.Keycode == Key.F)
+        {
+            _search.FocusQuery();
+            GetViewport().SetInputAsHandled();
+            return;
+        }
         var redo = key.Keycode == Key.Y || (key.Keycode == Key.Z && key.ShiftPressed);
         if (key.Keycode != Key.Z && !redo)
+            return;
+        // While typing in the text pane, undo belongs to the text.
+        if (_text.HasTextFocus)
             return;
 
         // Leave the text box first, so it doesn't keep showing a value the undo just replaced.
@@ -206,22 +258,15 @@ public partial class Main : Control
 
     private void OnChanged()
     {
-        RefreshPreview();
+        _tree.QueueRebuild();
+        _text.DocumentChanged();
+        _search.DocumentChanged();
         UpdateChrome();
-    }
-
-    private void RefreshPreview()
-    {
-        if (_editor == null)
-            return;
-        var line = _preview.GetFirstVisibleLine();
-        _preview.Text = _editor.Document.Write();
-        _preview.SetLineAsFirstVisible(Math.Min(line, _preview.GetLineCount() - 1));
     }
 
     private void UpdateChrome()
     {
-        var name = _path == null ? "No file" : Path.GetFileName(_path);
+        var name = _path == null ? (_editor == null ? "No file" : "Untitled") : Path.GetFileName(_path);
         var dirty = _editor?.IsDirty == true;
         GetWindow().Title = $"DataSquared — {name}{(dirty ? " •" : "")}";
 
@@ -232,8 +277,8 @@ public partial class Main : Control
 
         var doc = _editor?.Document;
         _status.Text = doc == null
-            ? "  Open a .json, .cfg or .ini file, or drop one on the window."
-            : $"  {doc.Format.ToString().ToUpperInvariant()}  ·  {_canvas.CardCount} cards  ·  {doc.Root.Descendants().Count()} nodes  ·  {_path}  ·  {(dirty ? "Unsaved" : "Saved")}";
+            ? "  Start a new file, open a .json, .cfg or .ini file, or drop one on the window."
+            : $"  {doc.Format.ToString().ToUpperInvariant()}  ·  {_canvas.CardCount} cards  ·  {doc.Root.Descendants().Count()} nodes  ·  {_path ?? "not saved yet"}  ·  {(dirty ? "Unsaved" : "Saved")}";
     }
 
     private void ConfirmDiscard(Action then)

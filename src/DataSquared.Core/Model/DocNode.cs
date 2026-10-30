@@ -82,6 +82,17 @@ public sealed class DocNode
         child.Parent = null;
     }
 
+    /// <summary>A copy of this node and everything under it, comments included, with no parent.</summary>
+    public DocNode DeepClone()
+    {
+        var copy = new DocNode { Kind = Kind, Key = Key, ValueKind = ValueKind, Text = Text, Separator = Separator };
+        copy.LeadingTrivia.AddRange(LeadingTrivia);
+        copy.TrailingTrivia.AddRange(TrailingTrivia);
+        foreach (var child in Children)
+            copy.Add(child.DeepClone());
+        return copy;
+    }
+
     public bool IsAncestorOf(DocNode node)
     {
         for (var p = node.Parent; p != null; p = p.Parent)

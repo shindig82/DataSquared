@@ -131,6 +131,35 @@ public sealed class DocumentEditor
         return node;
     }
 
+    /// <summary>
+    /// Replaces the whole document with <paramref name="text"/>, parsed in the document's format, as one
+    /// undoable step. Throws <see cref="FormatException"/> and changes nothing if the text doesn't parse.
+    /// </summary>
+    public void ReplaceAll(string text)
+    {
+        var parsed = Document.Parse(text, Document.Format);
+        if (parsed.Write() == Document.Write())
+            return;
+        Do(new ReplaceAllEdit(Document.Root, parsed.Root));
+    }
+
+    /// <summary>Why <paramref name="parent"/> can't hold a node of this kind, or null if it can.</summary>
+    public string? CannotHold(DocNode parent, NodeKind kind, ValueKind valueKind = ValueKind.String) =>
+        FormatRules.CannotHold(Document.Format, parent, kind, valueKind);
+
+    /// <summary>Copies a node and everything under it to just after the original. Returns the copy.</summary>
+    public DocNode Duplicate(DocNode node)
+    {
+        if (node.Parent is not { } parent)
+            throw new InvalidOperationException("The root can't be duplicated.");
+
+        var copy = node.DeepClone();
+        var key = parent.Kind == NodeKind.Array ? null : UniqueKey(parent, node.Key ?? "key");
+        var at = FormatRules.ClampIndex(Document.Format, parent, node.Kind, node.IndexInParent + 1);
+        Do(new PlaceEdit($"Duplicate {node.Key ?? "item"}", copy, parent, at, key));
+        return copy;
+    }
+
     public void Remove(DocNode node)
     {
         if (node.Parent == null)
