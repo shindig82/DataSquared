@@ -1,0 +1,31 @@
+{
+  // Shown in the title bar.
+  "project": "DataSquared",
+  "version": "1.0.0",
+  "active": true,
+  "count": 42,
+  "ratio": 1.50,
+  "tags": [
+    "json",
+    "editor"
+  ],
+  "author": {
+    "name": "Anonymous \"anon\"",
+    "email": null,
+    "verified": false
+  },
+  "items": [
+    {
+      "id": 1,
+      "label": "Apple",
+      "price": 5.5
+    },
+    {
+      "id": 2,
+      "label": "Banana",
+      "price": 3.2
+    }
+  ],
+  "empty": {},
+  "none": []
+}

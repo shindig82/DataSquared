@@ -1,2 +1,4 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Keep LF in the repo on every platform. Test fixtures are checked byte for byte.
+* text=auto eol=lf
+*.png binary
+tests/**/Fixtures/** -text
