@@ -62,6 +62,29 @@ and the file as text on the right.
   folder, so your data files aren't touched.
 - **Save**: Ctrl+S, or Ctrl+Shift+S to save as.
 
+## Opening files with DataSquared
+
+To make DataSquared open `.json`, `.xml`, `.ini` and `.cfg` files when you double-click them, run
+the exported program once with `--register`:
+
+```
+DataSquared.console.exe --register          (Windows)
+./DataSquared.x86_64 --register             (Linux)
+```
+
+- `--register=json,cfg` picks only some of the types.
+- `--unregister` undoes it, and puts back whatever opened those files before.
+- It's for your user account only, so it needs no admin rights. Run it again if you move the program.
+- On Windows it writes the file types under `HKEY_CURRENT_USER\Software\Classes`. If you once picked
+  another app with *Always use this app*, Windows keeps that choice and doesn't let programs change
+  it. Right-click such a file, choose *Open with > Choose another app > DataSquared*, and tick *Always*.
+- On Linux it adds `~/.local/share/applications/datasquared.desktop` and sets it as the default
+  with `xdg-mime` (or in `~/.config/mimeapps.list` if `xdg-mime` isn't installed). Few systems know
+  `.ini` and none know `.cfg`, so it also declares those two types, leaving plain text files alone.
+- Use `DataSquared.console.exe` on Windows to see the result in the terminal; `DataSquared.exe`
+  shows it in a small window. Running it from the Godot editor is refused, since files would then
+  open with the editor.
+
 ## Layout
 
 ```
