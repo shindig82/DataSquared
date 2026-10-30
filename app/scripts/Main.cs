@@ -321,18 +321,6 @@ public partial class Main : Control
         _status.Text = $"  {problem.Message}";
     }
 
-    /// <summary>Shows the next schema problem on the canvas, going round to the first after the last.</summary>
-    private void NextProblem()
-    {
-        if (_problems.Count == 0)
-            return;
-        var problem = _problems[_nextProblem++ % _problems.Count];
-        _nextProblem %= _problems.Count;
-        _canvas.FocusNode(problem.Node);
-        _tree.SelectNode(problem.Node);
-        _status.Text = $"  {problem.Message}";
-    }
-
     private void Save()
     {
         if (_editor == null)
