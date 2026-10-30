@@ -81,4 +81,14 @@ public class JsonFormatTests
         Assert.Equal(DocumentFormat.Json, Document.DetectFormat("data.txt", "  [1]"));
         Assert.Equal(DocumentFormat.Ini, Document.DetectFormat("data.txt", "[section]\na=1"));
     }
+
+    [Fact]
+    public void ACommentOnTheLastEntryIsWrittenOnce()
+    {
+        const string text = "{\n  \"a\": 1,\n  // on b\n  \"b\": {\n    \"c\": 1,\n    // on d\n    \"d\": 2\n  }\n}\n";
+        var doc = Document.Parse(text, DocumentFormat.Json);
+        Assert.Equal(text, doc.Write());
+        Assert.Equal("on d", doc.Root.Children[1].Children[1].Comment);
+        Assert.Empty(doc.Root.Children[1].TrailingTrivia);
+    }
 }

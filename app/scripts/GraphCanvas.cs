@@ -4,6 +4,7 @@ using System.Linq;
 using DataSquared.Core.Editing;
 using DataSquared.Core.Model;
 using DataSquared.Core.Schema;
+using DataSquared.Core.Templates;
 using Godot;
 
 namespace DataSquared;
@@ -39,8 +40,11 @@ public partial class GraphCanvas : GraphEdit
         MoveUp,
         MoveDown,
         Delete,
+        SaveTemplate,
         Add = 100,
         ChangeType = 200,
+        InsertTemplate = 300,
+        DeleteTemplate = 400,
     }
 
     private readonly Dictionary<DocNode, GraphNode> _cards = new();
@@ -58,6 +62,12 @@ public partial class GraphCanvas : GraphEdit
     private PopupMenu _menu = null!;
     private PopupMenu _addMenu = null!;
     private PopupMenu _typeMenu = null!;
+    private PopupMenu _deleteTemplateMenu = null!;
+    private List<Template> _templates = new();
+    private ConfirmationDialog _templateDialog = null!;
+    private LineEdit _templateName = null!;
+    private Label _templateNote = null!;
+    private DocNode? _templating;
     private DocNode? _menuTarget;
 
     private ConfirmationDialog _renameDialog = null!;
@@ -121,7 +131,25 @@ public partial class GraphCanvas : GraphEdit
         _menu.IdPressed += id => OnMenu((MenuId)id);
         _addMenu.IdPressed += id => OnMenu((MenuId)id);
         _typeMenu.IdPressed += id => OnMenu((MenuId)id);
+        _deleteTemplateMenu = new PopupMenu();
+        _deleteTemplateMenu.IdPressed += id => OnMenu((MenuId)id);
         AddChild(_menu);
+
+        _templateName = new LineEdit { CustomMinimumSize = new Vector2(320, 0), SelectAllOnFocus = true, PlaceholderText = "Template name" };
+        _templateNote = new Label { Modulate = new Color(1, 1, 1, 0.6f) };
+        var templateBox = new VBoxContainer();
+        templateBox.AddChild(_templateName);
+        templateBox.AddChild(_templateNote);
+        _templateDialog = new ConfirmationDialog { Title = "Save as template", OkButtonText = "Save" };
+        _templateDialog.AddChild(templateBox);
+        _templateDialog.RegisterTextEnter(_templateName);
+        _templateName.TextChanged += CheckTemplateName;
+        _templateDialog.Confirmed += () =>
+        {
+            if (_templating is { } node && Editor != null)
+                Try(() => TemplateStore.Save(Template.FromNode(_templateName.Text, node, Editor.Document.Format)));
+        };
+        AddChild(_templateDialog);
 
         _renameEdit = new LineEdit { CustomMinimumSize = new Vector2(320, 0), SelectAllOnFocus = true };
         _renameError = new Label { Modulate = Palette.Error };
@@ -203,12 +231,26 @@ public partial class GraphCanvas : GraphEdit
         _typeMenu.Clear();
         if (_addMenu.GetParent() != null) _menu.RemoveChild(_addMenu);
         if (_typeMenu.GetParent() != null) _menu.RemoveChild(_typeMenu);
+        _deleteTemplateMenu.Clear();
+        if (_deleteTemplateMenu.GetParent() != null) _menu.RemoveChild(_deleteTemplateMenu);
+        _templates = TemplateStore.All();
 
         if (target.IsContainer)
         {
             for (var i = 0; i < Types.Length; i++)
                 if (Editor.CannotHold(target, Types[i].Kind, Types[i].ValueKind) == null)
                     _addMenu.AddItem(Types[i].Label, (int)MenuId.Add + i);
+            // Templates that fit here, in this file's format.
+            var first = true;
+            for (var i = 0; i < _templates.Count; i++)
+            {
+                if (Editor.CanInsert(target, _templates[i].Instantiate(Editor.Document.Format)) != null)
+                    continue;
+                if (first && _addMenu.ItemCount > 0)
+                    _addMenu.AddSeparator("Templates");
+                first = false;
+                _addMenu.AddItem(_templates[i].Name, (int)MenuId.InsertTemplate + i);
+            }
             if (_addMenu.ItemCount > 0)
                 _menu.AddSubmenuNodeItem("Add", _addMenu);
         }
@@ -219,6 +261,13 @@ public partial class GraphCanvas : GraphEdit
             if (_menu.ItemCount > 0)
                 _menu.AddSeparator();
             _menu.AddItem(target.Comment.Length > 0 ? "Edit comment…" : "Add comment…", (int)MenuId.Comment);
+            _menu.AddItem("Save as template…", (int)MenuId.SaveTemplate);
+            if (_templates.Count > 0)
+            {
+                for (var i = 0; i < _templates.Count; i++)
+                    _deleteTemplateMenu.AddItem(_templates[i].Name, (int)MenuId.DeleteTemplate + i);
+                _menu.AddSubmenuNodeItem("Delete template", _deleteTemplateMenu);
+            }
         }
 
         if (target.Parent is { } parent)
@@ -275,6 +324,22 @@ public partial class GraphCanvas : GraphEdit
             case MenuId.Comment:
                 StartComment(node);
                 return;
+            case MenuId.SaveTemplate:
+                StartSaveTemplate(node);
+                return;
+            case >= MenuId.DeleteTemplate:
+                Try(() => TemplateStore.Delete(_templates[id - MenuId.DeleteTemplate].Name));
+                return;
+            case >= MenuId.InsertTemplate:
+            {
+                var template = _templates[id - MenuId.InsertTemplate];
+                DocNode? inserted = null;
+                Try(() => inserted = Editor.Insert(node, template.Instantiate(Editor.Document.Format)));
+                Refresh();
+                if (inserted != null)
+                    FocusNode(inserted);
+                return;
+            }
             case MenuId.Duplicate:
                 Try(() => Editor.Duplicate(node));
                 break;
@@ -320,6 +385,22 @@ public partial class GraphCanvas : GraphEdit
         _commentEdit.GrabFocus();
     }
 
+    private void StartSaveTemplate(DocNode node)
+    {
+        _templating = node;
+        _templateName.Text = node.Parent == null ? System.IO.Path.GetFileNameWithoutExtension(_title) : Palette.Name(node).TrimStart('@');
+        CheckTemplateName(_templateName.Text);
+        _templateDialog.PopupCentered();
+        _templateName.GrabFocus();
+    }
+
+    private void CheckTemplateName(string name)
+    {
+        var empty = string.IsNullOrWhiteSpace(name);
+        _templateNote.Text = empty ? "Give it a name." : TemplateStore.Exists(name) ? $"Replaces the template called {name.Trim()}." : "Right-click a card, then Add, to use it in any file.";
+        _templateDialog.GetOkButton().Disabled = empty;
+    }
+
     private void StartRename(DocNode node)
     {
         _renaming = node;
@@ -343,7 +424,7 @@ public partial class GraphCanvas : GraphEdit
         {
             action();
         }
-        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.IO.IOException or UnauthorizedAccessException)
         {
             Problem?.Invoke(e.Message);
         }
@@ -405,7 +486,10 @@ public partial class GraphCanvas : GraphEdit
 
         Clear();
         BuildCard(Editor.Document.Root, RootTitle(Editor.Document));
+        var added = new List<GraphNode>();
         PlaceCard(Editor.Document.Root);
+        foreach (var card in added)
+            ClearOverlaps(card);
         foreach (var (node, card) in _cards)
             if ((heights.TryGetValue(node, out var before) || heightsByPath.TryGetValue(_builtPaths[card], out before)) && card.Size.Y > before)
                 PushDown(card, before);
@@ -423,9 +507,23 @@ public partial class GraphCanvas : GraphEdit
             else if (node.Parent is { } parent && _cards.TryGetValue(parent, out var parentCard))
             {
                 card.PositionOffset = parentCard.PositionOffset + new Vector2(parentCard.Size.X + ColumnGap, RowTop(parentCard, node.IndexInParent + 1));
+                added.Add(card);
             }
             foreach (var child in node.Children.Where(c => c.IsContainer))
                 PlaceCard(child);
+        }
+    }
+
+    /// <summary>Moves a new card down until it no longer covers another card.</summary>
+    private void ClearOverlaps(GraphNode card)
+    {
+        for (var tries = 0; tries < _cards.Count; tries++)
+        {
+            var rect = new Rect2(card.PositionOffset, card.Size);
+            var under = _cards.Values.Where(c => c != card && new Rect2(c.PositionOffset, c.Size).Intersects(rect)).ToList();
+            if (under.Count == 0)
+                return;
+            card.PositionOffset = new Vector2(card.PositionOffset.X, under.Max(c => c.PositionOffset.Y + c.Size.Y) + RowGap);
         }
     }
 

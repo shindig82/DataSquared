@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using DataSquared.Core.Model;
 
@@ -60,6 +61,21 @@ internal static class FormatRules
         if (firstSection < 0)
             return index;
         return kind == NodeKind.Section ? System.Math.Max(index, firstSection) : System.Math.Min(index, firstSection);
+    }
+
+    /// <summary>Comment text as lines in the format's own style. Blank lines at either end are dropped.</summary>
+    public static IEnumerable<string> CommentLines(DocumentFormat format, string text)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n').Select(l => l.TrimEnd()).ToList();
+        while (lines.Count > 0 && lines[^1].Length == 0) lines.RemoveAt(lines.Count - 1);
+        while (lines.Count > 0 && lines[0].Length == 0) lines.RemoveAt(0);
+        return lines.Select(line => format switch
+        {
+            DocumentFormat.Json => line.Length == 0 ? "//" : $"// {line}",
+            // "--" isn't allowed inside an XML comment.
+            DocumentFormat.Xml => $"<!-- {line.Replace("--", "- -")} -->",
+            _ => line.Length == 0 ? ";" : $"; {line}",
+        }).ToList();
     }
 
     public static string? BadIniName(string key)

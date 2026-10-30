@@ -305,7 +305,8 @@ public partial class Main : Control
         _problems = _schema != null && _editor != null ? _schema.Validate(_editor.Document) : Array.Empty<SchemaProblem>();
         _nextProblem = Math.Min(_nextProblem, Math.Max(0, _problems.Count - 1));
         _canvas.ShowProblems(_problems);
-        UpdateChrome();
+        // After the canvas has rebuilt for this change, so the card count is current.
+        Callable.From(UpdateChrome).CallDeferred();
     }
 
     /// <summary>Shows the next schema problem on the canvas, going round to the first after the last.</summary>

@@ -50,6 +50,11 @@ and the file as text on the right.
   and XML too: sections and elements are objects, and keys and attributes are their properties.
   [`server.schema.json`](tests/DataSquared.Core.Tests/Fixtures/server.schema.json) is an example for
   Fleetborne's server.cfg.
+- **Templates**: right-click a card or row and pick *Save as template…* to keep it, with everything
+  under it and its comments. It then shows under *Add* on any card it fits, in any file. Templates
+  move between formats where they can: an INI section goes into JSON as an object, and an XML
+  element's attributes become plain keys. *Delete template* on the same menu removes one. They're
+  kept in Godot's user data folder, under `templates/`.
 - **Find**: Ctrl+F searches keys and values. Enter and Shift+Enter step through matches.
 - **Undo**: Ctrl+Z, and Ctrl+Y or Ctrl+Shift+Z to redo. Typing into one value undoes as one step.
 - **Layout**: drag cards anywhere, collapse a card with its ▾ button, *Auto layout* (Ctrl+L) to
