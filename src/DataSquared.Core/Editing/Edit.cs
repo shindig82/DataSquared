@@ -185,3 +185,29 @@ internal sealed class ReplaceAllEdit : Edit
         }
     }
 }
+
+internal sealed class CommentEdit : Edit
+{
+    private readonly DocNode _node;
+    private readonly List<string> _old;
+    private readonly List<string> _new;
+
+    public CommentEdit(DocNode node, List<string> trivia)
+    {
+        _node = node;
+        _old = node.LeadingTrivia.ToList();
+        _new = trivia;
+    }
+
+    public override string Description => $"Comment on {_node.Key ?? "item"}";
+
+    internal override void Apply() => Set(_new);
+
+    internal override void Revert() => Set(_old);
+
+    private void Set(List<string> trivia)
+    {
+        _node.LeadingTrivia.Clear();
+        _node.LeadingTrivia.AddRange(trivia);
+    }
+}

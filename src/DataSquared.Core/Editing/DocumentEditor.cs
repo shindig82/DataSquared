@@ -159,6 +159,29 @@ public sealed class DocumentEditor
         Do(new ReplaceAllEdit(Document.Root, parsed.Root));
     }
 
+    /// <summary>
+    /// Sets the comment written directly above a node, in the format's own style (// in JSON, ; in INI,
+    /// &lt;!-- --&gt; in XML). Empty text removes it. Blank lines and comments further up are left alone.
+    /// </summary>
+    public void SetComment(DocNode node, string text)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n').Select(l => l.TrimEnd()).ToList();
+        while (lines.Count > 0 && lines[^1].Length == 0) lines.RemoveAt(lines.Count - 1);
+        while (lines.Count > 0 && lines[0].Length == 0) lines.RemoveAt(0);
+
+        var trivia = node.LeadingTrivia.Take(node.CommentStart).ToList();
+        trivia.AddRange(lines.Select(line => Document.Format switch
+        {
+            DocumentFormat.Json => line.Length == 0 ? "//" : $"// {line}",
+            // "--" isn't allowed inside an XML comment.
+            DocumentFormat.Xml => $"<!-- {line.Replace("--", "- -")} -->",
+            _ => line.Length == 0 ? ";" : $"; {line}",
+        }));
+
+        if (!trivia.SequenceEqual(node.LeadingTrivia))
+            Do(new CommentEdit(node, trivia));
+    }
+
     /// <summary>Why <paramref name="parent"/> can't hold a node of this kind, or null if it can.</summary>
     public string? CannotHold(DocNode parent, NodeKind kind, ValueKind valueKind = ValueKind.String) =>
         FormatRules.CannotHold(Document.Format, parent, kind, valueKind);

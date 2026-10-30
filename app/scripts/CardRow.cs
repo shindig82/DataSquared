@@ -5,9 +5,10 @@ namespace DataSquared;
 
 /// <summary>
 /// One row on a card: a value, a link to a child card, or the card's header. Rows take a right-click
-/// for the context menu, and are where dragged rows get dropped.
+/// for the context menu, and are where dragged rows get dropped. A row's comment, when shown, sits
+/// under its line.
 /// </summary>
-public partial class CardRow : HBoxContainer
+public partial class CardRow : VBoxContainer
 {
     private const string DragPrefix = "datasquared-node:";
 
@@ -22,6 +23,29 @@ public partial class CardRow : HBoxContainer
         Node = node;
         IsHeader = isHeader;
         MouseFilter = MouseFilterEnum.Pass;
+        AddThemeConstantOverride("separation", 0);
+        Line = new HBoxContainer { MouseFilter = MouseFilterEnum.Pass };
+        AddChild(Line);
+    }
+
+    /// <summary>The row's controls: grip, name, value.</summary>
+    public HBoxContainer Line { get; }
+
+    /// <summary>Shows the node's comment under its row. Wrapped text needs a set width to know its height.</summary>
+    public void ShowComment(string comment, float width)
+    {
+        if (comment.Length == 0)
+            return;
+        var label = new Label
+        {
+            Text = comment,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            Modulate = Palette.Comment,
+            CustomMinimumSize = new Vector2(width, 0),
+            MouseFilter = MouseFilterEnum.Pass,
+        };
+        label.AddThemeFontSizeOverride("font_size", 12);
+        AddChild(label);
     }
 
     /// <summary>The node this row shows. For a header row, the card's own container.</summary>

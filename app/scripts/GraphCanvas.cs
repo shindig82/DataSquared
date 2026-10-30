@@ -33,6 +33,7 @@ public partial class GraphCanvas : GraphEdit
     private enum MenuId
     {
         Rename = 1,
+        Comment,
         Duplicate,
         MoveUp,
         MoveDown,
@@ -60,6 +61,22 @@ public partial class GraphCanvas : GraphEdit
     private LineEdit _renameEdit = null!;
     private Label _renameError = null!;
     private DocNode? _renaming;
+
+    private ConfirmationDialog _commentDialog = null!;
+    private TextEdit _commentEdit = null!;
+    private DocNode? _commenting;
+    private bool _showComments = true;
+
+    /// <summary>Whether comments from the file are shown under their rows.</summary>
+    public bool ShowComments
+    {
+        get => _showComments;
+        set
+        {
+            _showComments = value;
+            Refresh();
+        }
+    }
 
     /// <summary>Every change made on a card goes through this, so it can be undone.</summary>
     public DocumentEditor? Editor { get; set; }
@@ -116,6 +133,22 @@ public partial class GraphCanvas : GraphEdit
             Refresh();
         };
         AddChild(_renameDialog);
+
+        _commentEdit = new TextEdit
+        {
+            CustomMinimumSize = new Vector2(480, 160),
+            WrapMode = TextEdit.LineWrappingMode.Boundary,
+            PlaceholderText = "Write a comment. It's saved in the file, above this entry.",
+        };
+        _commentDialog = new ConfirmationDialog { Title = "Comment" };
+        _commentDialog.AddChild(_commentEdit);
+        _commentDialog.Confirmed += () =>
+        {
+            if (_commenting is { } node)
+                Try(() => Editor?.SetComment(node, _commentEdit.Text));
+            Refresh();
+        };
+        AddChild(_commentDialog);
     }
 
     /// <summary>Selects the card showing <paramref name="node"/> (or holding it, for a value) and scrolls it into the middle.</summary>
@@ -171,10 +204,16 @@ public partial class GraphCanvas : GraphEdit
                 _menu.AddSubmenuNodeItem("Add", _addMenu);
         }
 
-        if (target.Parent is { } parent)
+        // Every node can carry a comment, except a run of XML text.
+        if (target.Key != DocNode.TextKey)
         {
             if (_menu.ItemCount > 0)
                 _menu.AddSeparator();
+            _menu.AddItem(target.Comment.Length > 0 ? "Edit comment…" : "Add comment…", (int)MenuId.Comment);
+        }
+
+        if (target.Parent is { } parent)
+        {
             if (parent.Kind != NodeKind.Array)
                 _menu.AddItem("Rename…", (int)MenuId.Rename);
 
@@ -224,6 +263,9 @@ public partial class GraphCanvas : GraphEdit
             case MenuId.Rename:
                 StartRename(node);
                 return;
+            case MenuId.Comment:
+                StartComment(node);
+                return;
             case MenuId.Duplicate:
                 Try(() => Editor.Duplicate(node));
                 break;
@@ -258,6 +300,15 @@ public partial class GraphCanvas : GraphEdit
             }
         }
         Refresh();
+    }
+
+    private void StartComment(DocNode node)
+    {
+        _commenting = node;
+        _commentDialog.Title = $"Comment on {(node.Parent == null ? _title : Palette.Name(node))}";
+        _commentEdit.Text = node.Comment;
+        _commentDialog.PopupCentered(new Vector2I(520, 260));
+        _commentEdit.GrabFocus();
     }
 
     private void StartRename(DocNode node)
@@ -489,7 +540,9 @@ public partial class GraphCanvas : GraphEdit
 
         // Row 0 is the summary, and takes the incoming connection from the parent card.
         var summary = new CardRow(this, node, isHeader: true);
-        summary.AddChild(new Label { Text = Summary(node), Modulate = new Color(1, 1, 1, 0.55f) });
+        summary.Line.AddChild(new Label { Text = Summary(node), Modulate = new Color(1, 1, 1, 0.55f) });
+        if (ShowComments)
+            summary.ShowComment(node.Comment, CardWidth - 24);
         card.AddChild(summary);
         card.SetSlot(0, node.Parent != null, 0, Palette.KindColor(node), false, 0, Colors.White);
 
@@ -498,6 +551,8 @@ public partial class GraphCanvas : GraphEdit
         {
             var row = child.IsContainer ? ContainerRow(child) : ValueRow(child);
             row.TooltipText = child.Comment;
+            if (ShowComments)
+                row.ShowComment(child.Comment, CardWidth - 24);
             card.AddChild(row);
 
             if (!child.IsContainer)
@@ -518,15 +573,15 @@ public partial class GraphCanvas : GraphEdit
         _ids[id] = node;
         var row = new CardRow(this, node, isHeader: false);
         _rows[node] = row;
-        row.AddChild(new DragHandle(id, Palette.Name(node)));
-        row.AddChild(KeyLabel(node));
+        row.Line.AddChild(new DragHandle(id, Palette.Name(node)));
+        row.Line.AddChild(KeyLabel(node));
         return row;
     }
 
-    private Control ContainerRow(DocNode child)
+    private CardRow ContainerRow(DocNode child)
     {
         var row = NewRow(child);
-        row.AddChild(new Label
+        row.Line.AddChild(new Label
         {
             Text = $"{Palette.KindLabel(child)} · {Palette.Count(child)}",
             HorizontalAlignment = HorizontalAlignment.Right,
@@ -536,7 +591,7 @@ public partial class GraphCanvas : GraphEdit
         return row;
     }
 
-    private Control ValueRow(DocNode value)
+    private CardRow ValueRow(DocNode value)
     {
         var row = NewRow(value);
 
@@ -555,11 +610,11 @@ public partial class GraphCanvas : GraphEdit
                     Editor?.SetValue(value, on ? "true" : "false");
                     check.Text = value.Text;
                 };
-                row.AddChild(check);
+                row.Line.AddChild(check);
                 break;
             }
             case ValueKind.Null:
-                row.AddChild(new Label { Text = "null", SizeFlagsHorizontal = SizeFlags.ExpandFill, Modulate = Palette.KindColor(value) });
+                row.Line.AddChild(new Label { Text = "null", SizeFlagsHorizontal = SizeFlags.ExpandFill, Modulate = Palette.KindColor(value) });
                 break;
             default:
             {
@@ -580,7 +635,7 @@ public partial class GraphCanvas : GraphEdit
                     if (error == null)
                         Editor?.SetValue(value, text);
                 };
-                row.AddChild(edit);
+                row.Line.AddChild(edit);
                 break;
             }
         }

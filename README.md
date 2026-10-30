@@ -31,8 +31,11 @@ and the file as text on the right.
 
 - **Open or start a file**: Ctrl+O, drag a file onto the window, or pass it on the command line.
   Ctrl+N starts an empty JSON, INI or XML file.
-- **Edit values** right on the cards: type into a value or tick a checkbox. Hover a row to see its
-  comment from the file. A value that doesn't fit its type turns red and isn't applied.
+- **Edit values** right on the cards: type into a value or tick a checkbox. A value that doesn't
+  fit its type turns red and isn't applied.
+- **Comments**: a comment from the file shows under its row; the *Comments* switch hides them.
+  Right-click a row and pick *Add comment…* or *Edit comment…* to change one. It's saved in the
+  file's own style (`;` for INI, `//` for JSON, `<!-- -->` for XML).
 - **Change structure**: right-click a card or row to add, rename, change type, duplicate, move or
   delete. Double-click a name to rename it. Drag a row by its grip (⠿) onto another row or a card's
   header to move it. Only what the format allows is offered (INI can't nest, for example).
