@@ -13,6 +13,7 @@ public partial class CardRow : VBoxContainer
     private const string DragPrefix = "datasquared-node:";
 
     private readonly GraphCanvas _canvas;
+    private Label? _problem;
 
     // Godot needs a parameterless constructor to rebuild scripts after a hot reload.
     private CardRow() : this(null!, null!, false) { }
@@ -30,6 +31,23 @@ public partial class CardRow : VBoxContainer
 
     /// <summary>The row's controls: grip, name, value.</summary>
     public HBoxContainer Line { get; }
+
+    /// <summary>Marks the row as breaking the schema, with the reasons in the mark's tooltip, or clears it.</summary>
+    public void SetProblem(string? message)
+    {
+        if (message == null)
+        {
+            _problem?.QueueFree();
+            _problem = null;
+            return;
+        }
+        if (_problem == null)
+        {
+            _problem = new Label { Text = "⚠", Modulate = Palette.Error, MouseFilter = MouseFilterEnum.Stop };
+            Line.AddChild(_problem);
+        }
+        _problem.TooltipText = message;
+    }
 
     /// <summary>Shows the node's comment under its row. Wrapped text needs a set width to know its height.</summary>
     public void ShowComment(string comment, float width)

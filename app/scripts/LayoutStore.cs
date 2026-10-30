@@ -9,8 +9,8 @@ using Godot;
 namespace DataSquared;
 
 /// <summary>
-/// Remembers where cards were placed, per file. Kept in the user data folder rather than next to the
-/// file, so data files in a game repo stay untouched.
+/// Remembers where cards were placed, and which schema was picked, per file. Kept in the user data
+/// folder rather than next to the file, so data files in a game repo stay untouched.
 /// </summary>
 public static class LayoutStore
 {
@@ -21,26 +21,50 @@ public static class LayoutStore
         public float Zoom { get; set; } = 1f;
         public float[] Scroll { get; set; } = { 0, 0 };
         public Dictionary<string, float[]> Cards { get; set; } = new();
+        public string? Schema { get; set; }
     }
 
     public sealed record Saved(Dictionary<string, Vector2> Cards, float Zoom, Vector2 Scroll);
 
     public static Saved? Load(string filePath)
     {
+        var layout = Read(filePath);
+        if (layout == null)
+            return null;
+        var cards = new Dictionary<string, Vector2>();
+        foreach (var (key, xy) in layout.Cards)
+            if (xy.Length == 2)
+                cards[key] = new Vector2(xy[0], xy[1]);
+        return new Saved(cards, layout.Zoom, new Vector2(layout.Scroll[0], layout.Scroll[1]));
+    }
+
+    public static void Save(string filePath, IReadOnlyDictionary<string, Vector2> cards, float zoom, Vector2 scroll)
+    {
+        var layout = Read(filePath) ?? new Layout();
+        layout.Zoom = zoom;
+        layout.Scroll = new[] { scroll.X, scroll.Y };
+        layout.Cards.Clear();
+        foreach (var (key, pos) in cards)
+            layout.Cards[key] = new[] { MathF.Round(pos.X), MathF.Round(pos.Y) };
+        Write(filePath, layout);
+    }
+
+    /// <summary>The schema picked for this file, if one was.</summary>
+    public static string? LoadSchema(string filePath) => Read(filePath)?.Schema;
+
+    public static void SaveSchema(string filePath, string? schemaPath)
+    {
+        var layout = Read(filePath) ?? new Layout();
+        layout.Schema = schemaPath;
+        Write(filePath, layout);
+    }
+
+    private static Layout? Read(string filePath)
+    {
         try
         {
             var path = LayoutPath(filePath);
-            if (!System.IO.File.Exists(path))
-                return null;
-            var layout = JsonSerializer.Deserialize<Layout>(System.IO.File.ReadAllText(path));
-            if (layout == null)
-                return null;
-
-            var cards = new Dictionary<string, Vector2>();
-            foreach (var (key, xy) in layout.Cards)
-                if (xy.Length == 2)
-                    cards[key] = new Vector2(xy[0], xy[1]);
-            return new Saved(cards, layout.Zoom, new Vector2(layout.Scroll[0], layout.Scroll[1]));
+            return System.IO.File.Exists(path) ? JsonSerializer.Deserialize<Layout>(System.IO.File.ReadAllText(path)) : null;
         }
         catch (Exception e)
         {
@@ -49,17 +73,9 @@ public static class LayoutStore
         }
     }
 
-    public static void Save(string filePath, IReadOnlyDictionary<string, Vector2> cards, float zoom, Vector2 scroll)
+    private static void Write(string filePath, Layout layout)
     {
-        var layout = new Layout
-        {
-            File = Path.GetFullPath(filePath),
-            Zoom = zoom,
-            Scroll = new[] { scroll.X, scroll.Y },
-        };
-        foreach (var (key, pos) in cards)
-            layout.Cards[key] = new[] { MathF.Round(pos.X), MathF.Round(pos.Y) };
-
+        layout.File = Path.GetFullPath(filePath);
         var path = LayoutPath(filePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         System.IO.File.WriteAllText(path, JsonSerializer.Serialize(layout, new JsonSerializerOptions { WriteIndented = true }));

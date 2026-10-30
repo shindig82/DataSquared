@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fleetborne server.cfg",
+  "type": "object",
+  "required": ["server", "network", "match"],
+  "additionalProperties": false,
+  "properties": {
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "maxLength": 64 },
+        "welcome": { "type": "string" },
+        "password": { "type": "string" },
+        "admin_password": { "type": "string" },
+        "max_players": { "type": "integer", "minimum": 1, "maximum": 64 }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "port": { "$ref": "#/$defs/port" },
+        "ship_snapshots": { "type": "boolean" },
+        "input_delay_max": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "lag_compensation_ms": { "type": "integer", "minimum": 0 },
+        "aoi_range": { "type": "number", "minimum": 1, "maximum": 4 }
+      }
+    },
+    "match": {
+      "type": "object",
+      "properties": {
+        "system": { "type": "string", "pattern": "^[a-z_]+:[a-z0-9_]+$", "description": "The star system the match is flown in." },
+        "ai_count": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "ai_hull": { "type": "string" },
+        "teams": { "type": "integer", "enum": [0, 1, 2, 3, 4, 5, 6] },
+        "friendly_fire": { "type": "boolean" },
+        "drop_hold": { "type": "boolean" },
+        "max_mines": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "reconnect_seconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "logging": { "type": "object", "properties": { "log_state": { "type": "boolean" } } },
+    "steam": { "type": "object", "additionalProperties": { "type": ["boolean", "integer"] } }
+  },
+  "$defs": {
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+  }
+}
