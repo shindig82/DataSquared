@@ -93,7 +93,7 @@ public partial class SearchBar : HBoxContainer
 
     private static bool Matches(DocNode node, string q) =>
         (node.Key?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
-        || (node.Kind == NodeKind.Value && node.Text.Contains(q, StringComparison.OrdinalIgnoreCase));
+        || (!node.IsContainer && node.Text.Contains(q, StringComparison.OrdinalIgnoreCase));
 
     private void Step(int direction)
     {

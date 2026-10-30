@@ -89,7 +89,7 @@ public partial class NodeTree : Tree
             _items[node] = item;
             _nodes[item] = node;
 
-            item.SetText(0, node.Parent == null ? _title : node.Key ?? $"[{node.IndexInParent}]");
+            item.SetText(0, node.Parent == null ? (_document.Format == DocumentFormat.Xml ? node.Key : _title) : Palette.Name(node));
             item.SetTooltipText(0, node.Comment.Length > 0 ? node.Comment : node.Path);
             item.SetText(1, Palette.KindLabel(node).ToUpperInvariant());
             item.SetCustomColor(1, Palette.KindColor(node));

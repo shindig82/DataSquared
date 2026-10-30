@@ -1,3 +1,4 @@
+using System.Linq;
 using DataSquared.Core.Model;
 using Godot;
 
@@ -20,12 +21,14 @@ public static class Palette
         NodeKind.Object => "obj",
         NodeKind.Array => "arr",
         NodeKind.Section => "section",
+        NodeKind.Element => "elem",
+        NodeKind.Attribute => "attr",
         _ => node.ValueKind.ToString().ToLowerInvariant(),
     };
 
     public static Color KindColor(DocNode node) => node.Kind switch
     {
-        NodeKind.Object or NodeKind.Section => Object,
+        NodeKind.Object or NodeKind.Section or NodeKind.Element => Object,
         NodeKind.Array => Array,
         _ => node.ValueKind switch
         {
@@ -36,9 +39,24 @@ public static class Palette
         },
     };
 
+    /// <summary>How a node's name is shown: @name for an attribute, "text" for a run of XML text, [i] for an array item.</summary>
+    public static string Name(DocNode node) => node switch
+    {
+        { Key: DocNode.TextKey } => "text",
+        { Kind: NodeKind.Attribute } => $"@{node.Key}",
+        { Key: null } => $"[{node.IndexInParent}]",
+        _ => node.Key,
+    };
+
     public static string Count(DocNode node)
     {
         var n = node.Children.Count;
+        if (node.Kind == NodeKind.Element)
+        {
+            var attributes = node.Children.Count(c => c.Kind == NodeKind.Attribute);
+            var content = n - attributes;
+            return (attributes > 0 ? $"{attributes} attr · " : "") + (content == 1 ? "1 child" : $"{content} children");
+        }
         return node.Kind == NodeKind.Array
             ? n == 1 ? "1 item" : $"{n} items"
             : n == 1 ? "1 key" : $"{n} keys";

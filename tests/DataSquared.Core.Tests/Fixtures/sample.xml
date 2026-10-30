@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fleet loadout for the arena. -->
+<fleet name="Arena" version="2">
+  <!-- Ships the server spawns. -->
+  <ship id="1" hull="core:hull_light_corvette">
+    <label>Scout</label>
+    <speed>12.5</speed>
+    <armed>true</armed>
+    <cargo/>
+  </ship>
+  <ship id="2" hull="core:hull_frigate">
+    <label>Escort &amp; guard</label>
+    <speed>8</speed>
+    <armed>false</armed>
+    <cargo/>
+  </ship>
+  <note priority="high">Spawn escorts last</note>
+  <description>
+    Mixed <b>bold</b> text
+  </description>
+</fleet>
