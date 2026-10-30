@@ -1,6 +1,6 @@
 # DataSquared
 
-A visual editor for structured data files. Each object, array or INI section is a card on a
+A visual editor for structured data files: JSON, XML and INI. Each object, array or INI section is a card on a
 canvas: edit values right on the cards, drag cards wherever you like, and save back to the
 original format with comments and key order intact.
 
@@ -15,7 +15,11 @@ Prototype, with the core editing model in place. It opens and saves:
 - **INI / .cfg**, such as Fleetborne's `server.cfg`. An unedited file saves back byte for byte,
   and editing a value only changes that line. Repeated sections stay separate.
 
-XML is planned. The document model (`DocNode`) was designed to take it.
+- **XML**, with attributes, comments and the declaration kept. An element holding only text,
+  like `<port>9000</port>`, shows as a row on its parent's card; anything with attributes or child
+  elements gets a card of its own, with attributes listed first as `@name`. Elements may repeat;
+  attribute names must be unique. A save re-indents the way the file was and writes empty elements
+  as `<name/>`. Whitespace inside mixed text (`Some <b>bold</b> text`) is tidied onto separate lines.
 
 All changes go through `DocumentEditor` in the core library: set a value, rename, add, delete,
 move, duplicate, change type and replace-all, each checked against the format's rules and undoable.
@@ -26,7 +30,7 @@ The window has three panes: an outline of every node on the left, the card canva
 and the file as text on the right.
 
 - **Open or start a file**: Ctrl+O, drag a file onto the window, or pass it on the command line.
-  Ctrl+N starts an empty JSON or INI file.
+  Ctrl+N starts an empty JSON, INI or XML file.
 - **Edit values** right on the cards: type into a value or tick a checkbox. Hover a row to see its
   comment from the file. A value that doesn't fit its type turns red and isn't applied.
 - **Change structure**: right-click a card or row to add, rename, change type, duplicate, move or

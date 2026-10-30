@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using DataSquared.Core.Formats;
 using DataSquared.Core.Model;
 
 namespace DataSquared.Core.Editing;
@@ -71,7 +72,7 @@ public sealed class DocumentEditor
     /// <summary>Why <paramref name="text"/> can't be this value, or null if it can.</summary>
     public static string? ValidateValue(DocNode node, string text) => node.ValueKind switch
     {
-        _ when node.Kind != NodeKind.Value => "Only values have text.",
+        _ when node.IsContainer => "Only values have text.",
         ValueKind.Number when !double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _) => "Not a number.",
         ValueKind.Boolean when text.Trim() is not ("true" or "false") => "Must be true or false.",
         ValueKind.Null when text != "null" => "Change the type to give this a value.",
@@ -97,10 +98,17 @@ public sealed class DocumentEditor
     }
 
     /// <summary>Why <paramref name="key"/> can't name this node, or null if it can.</summary>
-    public string? ValidateKey(DocNode node, string key) =>
-        node.Parent == null || node.Parent.Kind == NodeKind.Array
+    public string? ValidateKey(DocNode node, string key)
+    {
+        if (node.Key == DocNode.TextKey)
+            return "Text has no name.";
+        // An XML root element has a name like any other; JSON and INI roots have none.
+        if (node.Parent == null && Document.Format == DocumentFormat.Xml)
+            return KeyProblem(null, node, node.Kind, key);
+        return node.Parent == null || node.Parent.Kind == NodeKind.Array
             ? "Array items and the root have no name."
             : KeyProblem(node.Parent, node, node.Kind, key);
+    }
 
     public void Rename(DocNode node, string key)
     {
@@ -116,13 +124,21 @@ public sealed class DocumentEditor
         if (FormatRules.CannotHold(Document.Format, parent, kind, valueKind) is { } error)
             throw new InvalidOperationException(error);
 
-        var node = kind == NodeKind.Value
+        var node = kind is NodeKind.Value or NodeKind.Attribute
             ? DocNode.Scalar(null, valueKind, DefaultText(valueKind))
             : DocNode.Container(kind);
+        node.Kind = kind;
         if (Document.Format == DocumentFormat.Ini && kind == NodeKind.Value)
             node.Separator = " = ";
 
-        var newKey = parent.Kind == NodeKind.Array ? null : key ?? UniqueKey(parent, kind == NodeKind.Section ? "section" : "key");
+        var stem = kind switch
+        {
+            NodeKind.Section => "section",
+            NodeKind.Element => "element",
+            NodeKind.Attribute => "attribute",
+            _ => Document.Format == DocumentFormat.Xml ? "value" : "key",
+        };
+        var newKey = parent.Kind == NodeKind.Array ? null : key ?? (MustBeUnique(kind) ? UniqueKey(parent, stem) : stem);
         if (newKey != null && KeyProblem(parent, null, kind, newKey) is { } keyError)
             throw new ArgumentException(keyError, nameof(key));
 
@@ -154,7 +170,8 @@ public sealed class DocumentEditor
             throw new InvalidOperationException("The root can't be duplicated.");
 
         var copy = node.DeepClone();
-        var key = parent.Kind == NodeKind.Array ? null : UniqueKey(parent, node.Key ?? "key");
+        // Repeated XML elements are normal, so a copy keeps its name; elsewhere it gets a fresh one.
+        var key = parent.Kind == NodeKind.Array ? null : MustBeUnique(node.Kind) ? UniqueKey(parent, node.Key ?? "key") : node.Key;
         var at = FormatRules.ClampIndex(Document.Format, parent, node.Kind, node.IndexInParent + 1);
         Do(new PlaceEdit($"Duplicate {node.Key ?? "item"}", copy, parent, at, key));
         return copy;
@@ -185,7 +202,7 @@ public sealed class DocumentEditor
         if (newParent.Kind != NodeKind.Array)
         {
             var wanted = node.Key ?? "key";
-            var clash = node.Kind != NodeKind.Section && newParent.Children.Any(c => c != node && c.Key == wanted && c.Kind != NodeKind.Section);
+            var clash = KeyProblem(newParent, node, node.Kind, wanted) != null;
             key = clash ? UniqueKey(newParent, wanted) : wanted;
         }
 
@@ -212,8 +229,12 @@ public sealed class DocumentEditor
     {
         if (node.Parent == null)
             throw new InvalidOperationException("The root's type can't be changed.");
-        if (kind == NodeKind.Value && valueKind == ValueKind.None)
+        if (kind is NodeKind.Value or NodeKind.Attribute && valueKind == ValueKind.None)
             throw new ArgumentException("Say which kind of value.", nameof(valueKind));
+        if ((node.Kind == NodeKind.Attribute) != (kind == NodeKind.Attribute))
+            throw new InvalidOperationException("Attributes can only change between kinds of value.");
+        if (node.Key == DocNode.TextKey && kind != NodeKind.Value)
+            throw new InvalidOperationException("Text can only change between kinds of value.");
         if (node.Kind == kind && node.ValueKind == valueKind)
             return;
         if (node.Kind == NodeKind.Section || kind == NodeKind.Section)
@@ -223,9 +244,14 @@ public sealed class DocumentEditor
 
         var children = new List<(DocNode, string?)>();
         var text = "";
-        if (kind == NodeKind.Value)
+        if (kind is NodeKind.Value or NodeKind.Attribute)
         {
             text = ConvertText(node, valueKind);
+        }
+        else if (kind == NodeKind.Element && !node.IsContainer && node.Text.Length > 0)
+        {
+            // <a>text</a> becoming an element keeps its text as a text run.
+            children.Add((DocNode.Scalar(null, ValueKind.String, node.Text), DocNode.TextKey));
         }
         else if (node.IsContainer)
         {
@@ -238,21 +264,35 @@ public sealed class DocumentEditor
             valueKind = ValueKind.None;
         }
 
-        Do(new ChangeTypeEdit(node, kind, kind == NodeKind.Value ? valueKind : ValueKind.None, text, children));
+        Do(new ChangeTypeEdit(node, kind, kind is NodeKind.Value or NodeKind.Attribute ? valueKind : ValueKind.None, text, children));
     }
 
     /// <summary>Why <paramref name="key"/> can't name a <paramref name="kind"/> in <paramref name="parent"/>, ignoring <paramref name="self"/>.</summary>
-    private string? KeyProblem(DocNode parent, DocNode? self, NodeKind kind, string key)
+    private string? KeyProblem(DocNode? parent, DocNode? self, NodeKind kind, string key)
     {
         if (key.Length == 0)
             return "Names can't be empty.";
         if (Document.Format == DocumentFormat.Ini && FormatRules.BadIniName(key) is { } iniError)
             return iniError;
-        // A file may repeat an INI section, but no other name.
-        if (kind != NodeKind.Section && parent.Children.Any(c => c != self && c.Key == key && c.Kind != NodeKind.Section))
+        if (Document.Format == DocumentFormat.Xml && XmlFormat.BadName(key) is { } xmlError)
+            return xmlError;
+        if (parent != null && MustBeUnique(kind) && parent.Children.Any(c => c != self && c.Key == key && MustBeUnique(c.Kind) && SameGroup(c.Kind, kind)))
             return $"There's already a {key} here.";
         return null;
     }
+
+    /// <summary>
+    /// Whether a name must be unique among its siblings. JSON keys must be; INI keys must be but a
+    /// section may repeat; in XML only attributes must be, as elements repeat freely.
+    /// </summary>
+    private bool MustBeUnique(NodeKind kind) => Document.Format switch
+    {
+        DocumentFormat.Ini => kind != NodeKind.Section,
+        DocumentFormat.Xml => kind == NodeKind.Attribute,
+        _ => true,
+    };
+
+    private static bool SameGroup(NodeKind a, NodeKind b) => (a == NodeKind.Attribute) == (b == NodeKind.Attribute);
 
     private void Do(Edit edit)
     {
@@ -264,14 +304,14 @@ public sealed class DocumentEditor
 
     private static string ConvertText(DocNode node, ValueKind to)
     {
-        var text = node.Kind == NodeKind.Value && node.ValueKind != ValueKind.Null ? node.Text.Trim() : "";
+        var text = !node.IsContainer && node.ValueKind != ValueKind.Null ? node.Text.Trim() : "";
         return to switch
         {
             ValueKind.Number => double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _) ? text
                 : text == "true" ? "1" : "0",
             ValueKind.Boolean => text is "true" or "1" ? "true" : "false",
             ValueKind.Null => "null",
-            _ => node.Kind == NodeKind.Value && node.ValueKind != ValueKind.Null ? node.Text : "",
+            _ => !node.IsContainer && node.ValueKind != ValueKind.Null ? node.Text : "",
         };
     }
 

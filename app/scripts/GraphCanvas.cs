@@ -26,6 +26,8 @@ public partial class GraphCanvas : GraphEdit
         ("Object", NodeKind.Object, ValueKind.None),
         ("Array", NodeKind.Array, ValueKind.None),
         ("Section", NodeKind.Section, ValueKind.None),
+        ("Element", NodeKind.Element, ValueKind.None),
+        ("Attribute", NodeKind.Attribute, ValueKind.String),
     };
 
     private enum MenuId
@@ -183,8 +185,15 @@ public partial class GraphCanvas : GraphEdit
                     var (label, kind, valueKind) = Types[i];
                     if (kind == NodeKind.Section || Editor.CannotHold(parent, kind, valueKind) != null)
                         continue;
+                    // An attribute changes only between kinds of value; nothing else becomes one.
+                    if (kind == NodeKind.Attribute || (target.Kind == NodeKind.Attribute && kind != NodeKind.Value))
+                        continue;
+                    // A run of XML text can't become an element.
+                    if (target.Key == DocNode.TextKey && kind != NodeKind.Value)
+                        continue;
                     _typeMenu.AddRadioCheckItem(label, (int)MenuId.ChangeType + i);
-                    _typeMenu.SetItemChecked(_typeMenu.ItemCount - 1, kind == target.Kind && valueKind == target.ValueKind);
+                    var current = target.Kind == NodeKind.Attribute ? kind == NodeKind.Value : kind == target.Kind;
+                    _typeMenu.SetItemChecked(_typeMenu.ItemCount - 1, current && valueKind == target.ValueKind);
                 }
                 _menu.AddSubmenuNodeItem("Change type", _typeMenu);
             }
@@ -230,6 +239,9 @@ public partial class GraphCanvas : GraphEdit
             case >= MenuId.ChangeType:
             {
                 var (_, kind, valueKind) = Types[id - MenuId.ChangeType];
+                // For an attribute, "Number" means a number attribute.
+                if (node.Kind == NodeKind.Attribute && kind == NodeKind.Value)
+                    kind = NodeKind.Attribute;
                 Try(() => Editor.ChangeType(node, kind, valueKind));
                 break;
             }
@@ -283,7 +295,7 @@ public partial class GraphCanvas : GraphEdit
         _collapsed.Clear();
         _known.Clear();
         Clear();
-        BuildCard(doc.Root, title);
+        BuildCard(doc.Root, RootTitle(doc));
         AutoLayout();
 
         if (saved != null)
@@ -315,7 +327,7 @@ public partial class GraphCanvas : GraphEdit
         var (zoom, scroll) = (Zoom, ScrollOffset);
 
         Clear();
-        BuildCard(Editor.Document.Root, _title);
+        BuildCard(Editor.Document.Root, RootTitle(Editor.Document));
         PlaceCard(Editor.Document.Root);
         foreach (var (node, card) in _cards)
             if ((heights.TryGetValue(node, out var before) || heightsByPath.TryGetValue(_builtPaths[card], out before)) && card.Size.Y > before)
@@ -373,6 +385,9 @@ public partial class GraphCanvas : GraphEdit
                 card.PositionOffset += new Vector2(0, growth);
         }
     }
+
+    /// <summary>The file name, or for XML the root element's own name.</summary>
+    private string RootTitle(Document doc) => doc.Format == DocumentFormat.Xml ? $"{doc.Root.Key}  ({_title})" : _title;
 
     private void RestoreView(float zoom, Vector2 scroll)
     {
@@ -503,7 +518,7 @@ public partial class GraphCanvas : GraphEdit
         _ids[id] = node;
         var row = new CardRow(this, node, isHeader: false);
         _rows[node] = row;
-        row.AddChild(new DragHandle(id, node.Key ?? $"[{node.IndexInParent}]"));
+        row.AddChild(new DragHandle(id, Palette.Name(node)));
         row.AddChild(KeyLabel(node));
         return row;
     }
@@ -577,12 +592,12 @@ public partial class GraphCanvas : GraphEdit
     {
         var label = new Label
         {
-            Text = node.Key ?? $"[{node.IndexInParent}]",
+            Text = Palette.Name(node),
             CustomMinimumSize = new Vector2(120, 0),
             ClipText = true,
             TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
         };
-        if (node.Key != null)
+        if (node.Key != null && node.Key != DocNode.TextKey)
         {
             // Double-click a name to rename it, as on the reference editor.
             label.MouseFilter = MouseFilterEnum.Pass;

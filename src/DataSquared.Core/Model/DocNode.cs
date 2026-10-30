@@ -12,8 +12,15 @@ public enum NodeKind
     Array,
     /// <summary>INI [section]. Behaves like an object, but a file may repeat one.</summary>
     Section,
-    /// <summary>A scalar: string, number, boolean or null.</summary>
+    /// <summary>
+    /// A scalar: string, number, boolean or null. In XML, an element holding only text, such as
+    /// &lt;port&gt;9000&lt;/port&gt;, or (keyed <see cref="DocNode.TextKey"/>) a run of text between child elements.
+    /// </summary>
     Value,
+    /// <summary>XML element with attributes or child elements.</summary>
+    Element,
+    /// <summary>XML attribute. A scalar that always comes before its element's content.</summary>
+    Attribute,
 }
 
 public enum ValueKind
@@ -31,6 +38,9 @@ public enum ValueKind
 /// </summary>
 public sealed class DocNode
 {
+    /// <summary>The key of an XML text run that sits between child elements.</summary>
+    public const string TextKey = "#text";
+
     public NodeKind Kind { get; set; }
 
     /// <summary>The key or section name. Null for array items and the root.</summary>
@@ -56,7 +66,7 @@ public sealed class DocNode
     /// <summary>INI only: the text between key and value, such as " = ".</summary>
     public string? Separator { get; set; }
 
-    public bool IsContainer => Kind != NodeKind.Value;
+    public bool IsContainer => Kind is NodeKind.Object or NodeKind.Array or NodeKind.Section or NodeKind.Element;
 
     public static DocNode Container(NodeKind kind, string? key = null) => new() { Kind = kind, Key = key };
 
@@ -127,10 +137,23 @@ public sealed class DocNode
     {
         get
         {
-            var lines = LeadingTrivia
-                .Select(l => l.Trim())
-                .Where(l => l.StartsWith(';') || l.StartsWith('#') || l.StartsWith("//") || l.StartsWith("/*") || l.StartsWith('*'))
-                .Select(l => l.TrimStart(';', '#', '/', '*').TrimEnd('/', '*').Trim());
+            var lines = new List<string>();
+            var inXml = false;
+            foreach (var raw in LeadingTrivia)
+            {
+                var line = raw.Trim();
+                var isComment = inXml || line.StartsWith("<!--") || line.StartsWith(';') || line.StartsWith('#')
+                    || line.StartsWith("//") || line.StartsWith("/*") || line.StartsWith('*');
+                if (line.StartsWith("<!--"))
+                    inXml = true;
+                if (line.EndsWith("-->"))
+                    inXml = false;
+                if (!isComment)
+                    continue;
+                if (line.StartsWith("<!--")) line = line[4..];
+                if (line.EndsWith("-->")) line = line[..^3];
+                lines.Add(line.TrimStart(';', '#', '/', '*').TrimEnd('/', '*').Trim());
+            }
             return string.Join("\n", lines).Trim();
         }
     }

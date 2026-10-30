@@ -10,7 +10,7 @@ namespace DataSquared;
 /// <summary>The main window: toolbar, node tree, card canvas, the file as text, and a status bar.</summary>
 public partial class Main : Control
 {
-    private const string FileFilters = "*.json, *.cfg, *.ini ; Data files";
+    private const string FileFilters = "*.json, *.xml, *.cfg, *.ini ; Data files";
 
     private NodeTree _tree = null!;
     private GraphCanvas _canvas = null!;
@@ -74,7 +74,8 @@ public partial class Main : Control
         _newMenu = new PopupMenu();
         _newMenu.AddItem("New JSON file", 0);
         _newMenu.AddItem("New INI file", 1);
-        _newMenu.IdPressed += id => ConfirmDiscard(() => New(id == 0 ? DocumentFormat.Json : DocumentFormat.Ini));
+        _newMenu.AddItem("New XML file", 2);
+        _newMenu.IdPressed += id => ConfirmDiscard(() => New((DocumentFormat)id));
         AddChild(_newMenu);
         toolbar.AddChild(ToolButton("New", Key.N, false, () =>
         {
@@ -164,8 +165,13 @@ public partial class Main : Control
 
     private void New(DocumentFormat format)
     {
-        var doc = Document.Parse(format == DocumentFormat.Json ? "{}\n" : "", format);
-        Show(doc, null, format == DocumentFormat.Json ? "Untitled.json" : "Untitled.ini", null);
+        var (text, name) = format switch
+        {
+            DocumentFormat.Json => ("{}\n", "Untitled.json"),
+            DocumentFormat.Xml => ("<root/>\n", "Untitled.xml"),
+            _ => ("", "Untitled.ini"),
+        };
+        Show(Document.Parse(text, format), null, name, null);
     }
 
     private void Open(string path)
@@ -277,7 +283,7 @@ public partial class Main : Control
 
         var doc = _editor?.Document;
         _status.Text = doc == null
-            ? "  Start a new file, open a .json, .cfg or .ini file, or drop one on the window."
+            ? "  Start a new file, open a .json, .xml, .cfg or .ini file, or drop one on the window."
             : $"  {doc.Format.ToString().ToUpperInvariant()}  ·  {_canvas.CardCount} cards  ·  {doc.Root.Descendants().Count()} nodes  ·  {_path ?? "not saved yet"}  ·  {(dirty ? "Unsaved" : "Saved")}";
     }
 

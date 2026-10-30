@@ -148,6 +148,12 @@ public partial class TextPane : VBoxContainer
             h.AddColorRegion("//", "", Palette.Comment, true);
             h.AddColorRegion("/*", "*/", Palette.Comment);
         }
+        else if (format == DocumentFormat.Xml)
+        {
+            h.AddColorRegion("<!--", "-->", Palette.Comment);
+            h.AddColorRegion("<?", "?>", Palette.Comment);
+            h.AddColorRegion("\"", "\"", Palette.String);
+        }
         else
         {
             h.AddColorRegion(";", "", Palette.Comment, true);

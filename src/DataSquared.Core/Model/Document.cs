@@ -9,6 +9,7 @@ public enum DocumentFormat
 {
     Json,
     Ini,
+    Xml,
 }
 
 public sealed class Document
@@ -28,13 +29,14 @@ public sealed class Document
 
     public bool EndsWithNewline { get; set; } = true;
 
-    /// <summary>JSON only: one level of indentation, as the file had it.</summary>
+    /// <summary>JSON and XML: one level of indentation, as the file had it.</summary>
     public string Indent { get; set; } = "  ";
 
     public static Document Parse(string text, DocumentFormat format) => format switch
     {
         DocumentFormat.Json => JsonFormat.Read(text),
         DocumentFormat.Ini => IniFormat.Read(text),
+        DocumentFormat.Xml => XmlFormat.Read(text),
         _ => throw new ArgumentOutOfRangeException(nameof(format)),
     };
 
@@ -42,6 +44,7 @@ public sealed class Document
     {
         DocumentFormat.Json => JsonFormat.Write(this),
         DocumentFormat.Ini => IniFormat.Write(this),
+        DocumentFormat.Xml => XmlFormat.Write(this),
         _ => throw new ArgumentOutOfRangeException(nameof(Format)),
     };
 
@@ -63,11 +66,15 @@ public sealed class Document
             case ".cfg":
             case ".ini":
                 return DocumentFormat.Ini;
+            case ".xml":
+                return DocumentFormat.Xml;
         }
 
         var first = text.TrimStart('\uFEFF', ' ', '\t', '\r', '\n');
         if (first.StartsWith('{'))
             return DocumentFormat.Json;
+        if (first.StartsWith('<'))
+            return DocumentFormat.Xml;
         if (!first.StartsWith('['))
             return DocumentFormat.Ini;
 
