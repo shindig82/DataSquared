@@ -165,19 +165,8 @@ public sealed class DocumentEditor
     /// </summary>
     public void SetComment(DocNode node, string text)
     {
-        var lines = text.Replace("\r\n", "\n").Split('\n').Select(l => l.TrimEnd()).ToList();
-        while (lines.Count > 0 && lines[^1].Length == 0) lines.RemoveAt(lines.Count - 1);
-        while (lines.Count > 0 && lines[0].Length == 0) lines.RemoveAt(0);
-
         var trivia = node.LeadingTrivia.Take(node.CommentStart).ToList();
-        trivia.AddRange(lines.Select(line => Document.Format switch
-        {
-            DocumentFormat.Json => line.Length == 0 ? "//" : $"// {line}",
-            // "--" isn't allowed inside an XML comment.
-            DocumentFormat.Xml => $"<!-- {line.Replace("--", "- -")} -->",
-            _ => line.Length == 0 ? ";" : $"; {line}",
-        }));
-
+        trivia.AddRange(FormatRules.CommentLines(Document.Format, text));
         if (!trivia.SequenceEqual(node.LeadingTrivia))
             Do(new CommentEdit(node, trivia));
     }
@@ -198,6 +187,61 @@ public sealed class DocumentEditor
         var at = FormatRules.ClampIndex(Document.Format, parent, node.Kind, node.IndexInParent + 1);
         Do(new PlaceEdit($"Duplicate {node.Key ?? "item"}", copy, parent, at, key));
         return copy;
+    }
+
+    /// <summary>
+    /// Why <paramref name="node"/>, with everything under it, can't go into <paramref name="parent"/>, or
+    /// null if it can. The node has to be new to the document, such as one made from a template.
+    /// </summary>
+    public string? CanInsert(DocNode parent, DocNode node)
+    {
+        if (node.Parent != null)
+            return "That is already part of a document.";
+        if (FormatRules.CannotHold(Document.Format, parent, node.Kind, node.ValueKind) is { } error)
+            return error;
+        // A clash with a sibling is fine, as Insert picks a free name; a name the format can't have isn't.
+        if (parent.Kind != NodeKind.Array && KeyProblem(null, null, node.Kind, node.Key ?? "key") is { } keyError)
+            return keyError;
+        return SubtreeProblem(node);
+    }
+
+    /// <summary>Puts a new node, with everything under it, into <paramref name="parent"/>. Its name is made unique if it clashes.</summary>
+    public DocNode Insert(DocNode parent, DocNode node, int? index = null)
+    {
+        if (CanInsert(parent, node) is { } error)
+            throw new InvalidOperationException(error);
+
+        string? key = null;
+        if (parent.Kind != NodeKind.Array)
+        {
+            var wanted = node.Key ?? "key";
+            key = KeyProblem(parent, null, node.Kind, wanted) != null ? UniqueKey(parent, wanted) : wanted;
+        }
+        var at = FormatRules.ClampIndex(Document.Format, parent, node.Kind, index ?? parent.Children.Count);
+        Do(new PlaceEdit($"Insert {key ?? "item"}", node, parent, at, key));
+        return node;
+    }
+
+    private string? SubtreeProblem(DocNode node)
+    {
+        foreach (var child in node.Children)
+        {
+            // A node that isn't in the document yet looks like the top level to the INI rules.
+            if (Document.Format == DocumentFormat.Ini && child.Kind == NodeKind.Section)
+                return "Sections can only go at the top level.";
+            if (FormatRules.CannotHold(Document.Format, node, child.Kind, child.ValueKind) is { } error)
+                return error;
+            if (node.Kind != NodeKind.Array && child.Key != DocNode.TextKey)
+            {
+                if (child.Key == null)
+                    return $"Everything in {node.Key ?? "it"} needs a name.";
+                if (KeyProblem(node, child, child.Kind, child.Key) is { } keyError)
+                    return $"{child.Key}: {keyError}";
+            }
+            if (SubtreeProblem(child) is { } deeper)
+                return deeper;
+        }
+        return null;
     }
 
     public void Remove(DocNode node)

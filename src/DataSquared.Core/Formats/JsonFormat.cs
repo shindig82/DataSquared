@@ -142,7 +142,9 @@ public static class JsonFormat
             _i++;
             while (true)
             {
+                // Comments carried from before the last comma belong to this entry only.
                 var trivia = carried;
+                carried = new List<string>();
                 trivia.AddRange(SkipTrivia());
                 if (AtEnd) throw Error($"Missing '{close}'");
                 if (_s[_i] == close)
