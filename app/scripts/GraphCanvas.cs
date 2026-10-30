@@ -42,6 +42,7 @@ public partial class GraphCanvas : GraphEdit
     private readonly Dictionary<DocNode, GraphNode> _cards = new();
     private readonly Dictionary<long, DocNode> _ids = new();
     private readonly Dictionary<GraphNode, string> _builtPaths = new();
+    private readonly Dictionary<DocNode, Control> _rows = new();
     private int _nextCardId;
     private string _title = "";
 
@@ -124,6 +125,13 @@ public partial class GraphCanvas : GraphEdit
         foreach (var other in _cards.Values)
             other.Selected = other == card;
         ScrollOffset = card.PositionOffset * Zoom - (Size - card.Size * Zoom) / 2;
+
+        // Flash the row itself, so a match in a long card is easy to spot.
+        if (_rows.TryGetValue(node, out var row))
+        {
+            row.Modulate = new Color(1.8f, 1.6f, 0.6f);
+            CreateTween().TweenProperty(row, "modulate", Colors.White, 1.2);
+        }
     }
 
     public DocNode? NodeById(long id) => _ids.GetValueOrDefault(id);
@@ -410,6 +418,7 @@ public partial class GraphCanvas : GraphEdit
         _cards.Clear();
         _ids.Clear();
         _builtPaths.Clear();
+        _rows.Clear();
     }
 
     private GraphNode BuildCard(DocNode node, string? title = null)
@@ -462,6 +471,7 @@ public partial class GraphCanvas : GraphEdit
         var id = _ids.Count + 1L;
         _ids[id] = node;
         var row = new CardRow(this, node, isHeader: false);
+        _rows[node] = row;
         row.AddChild(new DragHandle(id, node.Key ?? $"[{node.IndexInParent}]"));
         row.AddChild(KeyLabel(node));
         return row;

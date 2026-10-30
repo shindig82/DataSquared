@@ -15,6 +15,8 @@ public partial class Main : Control
     private NodeTree _tree = null!;
     private GraphCanvas _canvas = null!;
     private TextPane _text = null!;
+    private SearchBar _search = null!;
+    private PopupMenu _newMenu = null!;
     private Label _status = null!;
     private FileDialog _openDialog = null!;
     private FileDialog _saveDialog = null!;
@@ -64,6 +66,16 @@ public partial class Main : Control
         toolbarPanel.AddChild(toolbar);
         root.AddChild(toolbarPanel);
 
+        _newMenu = new PopupMenu();
+        _newMenu.AddItem("New JSON file", 0);
+        _newMenu.AddItem("New INI file", 1);
+        _newMenu.IdPressed += id => ConfirmDiscard(() => New(id == 0 ? DocumentFormat.Json : DocumentFormat.Ini));
+        AddChild(_newMenu);
+        toolbar.AddChild(ToolButton("New", Key.N, false, () =>
+        {
+            _newMenu.Position = DisplayServer.MouseGetPosition();
+            _newMenu.Popup();
+        }));
         toolbar.AddChild(ToolButton("Open", Key.O, false, () => ConfirmDiscard(() => _openDialog.PopupCentered(new Vector2I(900, 600)))));
         toolbar.AddChild(ToolButton("Save", Key.S, false, Save));
         toolbar.AddChild(ToolButton("Save As", Key.S, true, () => _saveDialog.PopupCentered(new Vector2I(900, 600))));
@@ -77,6 +89,14 @@ public partial class Main : Control
         toolbar.AddChild(_redoButton);
         toolbar.AddChild(new VSeparator());
         toolbar.AddChild(ToolButton("Auto layout", Key.L, false, () => _canvas.AutoLayout()));
+        toolbar.AddChild(new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill });
+        _search = new SearchBar();
+        _search.Jump += node =>
+        {
+            _canvas.FocusNode(node);
+            _tree.SelectNode(node);
+        };
+        toolbar.AddChild(_search);
 
         var outer = new HSplitContainer { SizeFlagsVertical = SizeFlags.ExpandFill };
         root.AddChild(outer);
@@ -136,24 +156,35 @@ public partial class Main : Control
         return button;
     }
 
+    private void New(DocumentFormat format)
+    {
+        var doc = Document.Parse(format == DocumentFormat.Json ? "{}\n" : "", format);
+        Show(doc, null, format == DocumentFormat.Json ? "Untitled.json" : "Untitled.ini", null);
+    }
+
     private void Open(string path)
     {
         try
         {
-            var doc = Document.Load(path);
-            _editor = new DocumentEditor(doc);
-            _editor.Changed += OnChanged;
-            _path = path;
-            _canvas.Editor = _editor;
-            _canvas.ShowDocument(doc, Path.GetFileName(path), LayoutStore.Load(path));
-            _tree.ShowDocument(doc, Path.GetFileName(path));
-            _text.ShowDocument(_editor);
-            UpdateChrome();
+            Show(Document.Load(path), path, Path.GetFileName(path), LayoutStore.Load(path));
         }
         catch (Exception e) when (e is IOException or FormatException or UnauthorizedAccessException)
         {
             ShowError($"Couldn't open {Path.GetFileName(path)}.\n\n{e.Message}");
         }
+    }
+
+    private void Show(Document doc, string? path, string title, LayoutStore.Saved? layout)
+    {
+        _editor = new DocumentEditor(doc);
+        _editor.Changed += OnChanged;
+        _path = path;
+        _canvas.Editor = _editor;
+        _canvas.ShowDocument(doc, title, layout);
+        _tree.ShowDocument(doc, title);
+        _text.ShowDocument(_editor);
+        _search.ShowDocument(doc);
+        UpdateChrome();
     }
 
     private void Save()
@@ -188,6 +219,12 @@ public partial class Main : Control
     {
         if (e is not InputEventKey { Pressed: true } key || !key.IsCommandOrControlPressed())
             return;
+        if (key.Keycode == Key.F)
+        {
+            _search.FocusQuery();
+            GetViewport().SetInputAsHandled();
+            return;
+        }
         var redo = key.Keycode == Key.Y || (key.Keycode == Key.Z && key.ShiftPressed);
         if (key.Keycode != Key.Z && !redo)
             return;
@@ -217,12 +254,13 @@ public partial class Main : Control
     {
         _tree.QueueRebuild();
         _text.DocumentChanged();
+        _search.DocumentChanged();
         UpdateChrome();
     }
 
     private void UpdateChrome()
     {
-        var name = _path == null ? "No file" : Path.GetFileName(_path);
+        var name = _path == null ? (_editor == null ? "No file" : "Untitled") : Path.GetFileName(_path);
         var dirty = _editor?.IsDirty == true;
         GetWindow().Title = $"DataSquared — {name}{(dirty ? " •" : "")}";
 
@@ -233,8 +271,8 @@ public partial class Main : Control
 
         var doc = _editor?.Document;
         _status.Text = doc == null
-            ? "  Open a .json, .cfg or .ini file, or drop one on the window."
-            : $"  {doc.Format.ToString().ToUpperInvariant()}  ·  {_canvas.CardCount} cards  ·  {doc.Root.Descendants().Count()} nodes  ·  {_path}  ·  {(dirty ? "Unsaved" : "Saved")}";
+            ? "  Start a new file, open a .json, .cfg or .ini file, or drop one on the window."
+            : $"  {doc.Format.ToString().ToUpperInvariant()}  ·  {_canvas.CardCount} cards  ·  {doc.Root.Descendants().Count()} nodes  ·  {_path ?? "not saved yet"}  ·  {(dirty ? "Unsaved" : "Saved")}";
     }
 
     private void ConfirmDiscard(Action then)
