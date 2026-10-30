@@ -143,3 +143,45 @@ internal sealed class ChangeTypeEdit : Edit
         }
     }
 }
+
+/// <summary>Swaps the whole document's content for another's, such as text typed into the text pane.</summary>
+internal sealed class ReplaceAllEdit : Edit
+{
+    private readonly DocNode _root;
+    private readonly Content _old;
+    private readonly Content _new;
+
+    public ReplaceAllEdit(DocNode root, DocNode replacement)
+    {
+        _root = root;
+        _old = Content.Of(root);
+        _new = Content.Of(replacement);
+        foreach (var child in replacement.Children.ToList())
+            replacement.Remove(child);
+    }
+
+    public override string Description => "Apply text";
+
+    internal override void Apply() => _new.RestoreTo(_root);
+
+    internal override void Revert() => _old.RestoreTo(_root);
+
+    private sealed record Content(NodeKind Kind, List<DocNode> Children, List<string> Leading, List<string> Trailing)
+    {
+        public static Content Of(DocNode node) =>
+            new(node.Kind, node.Children.ToList(), node.LeadingTrivia.ToList(), node.TrailingTrivia.ToList());
+
+        public void RestoreTo(DocNode node)
+        {
+            foreach (var child in node.Children.ToList())
+                node.Remove(child);
+            node.Kind = Kind;
+            foreach (var child in Children)
+                node.Add(child);
+            node.LeadingTrivia.Clear();
+            node.LeadingTrivia.AddRange(Leading);
+            node.TrailingTrivia.Clear();
+            node.TrailingTrivia.AddRange(Trailing);
+        }
+    }
+}

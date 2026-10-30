@@ -41,6 +41,7 @@ public partial class GraphCanvas : GraphEdit
 
     private readonly Dictionary<DocNode, GraphNode> _cards = new();
     private readonly Dictionary<long, DocNode> _ids = new();
+    private readonly Dictionary<GraphNode, string> _builtPaths = new();
     private int _nextCardId;
     private string _title = "";
 
@@ -60,6 +61,9 @@ public partial class GraphCanvas : GraphEdit
     /// <summary>Raised with a message when an edit is refused, such as a duplicate name.</summary>
     public event Action<string>? Problem;
 
+    /// <summary>Raised when the user selects a card.</summary>
+    public event Action<DocNode>? CardSelected;
+
     public override void _Ready()
     {
         ShowGrid = true;
@@ -76,6 +80,12 @@ public partial class GraphCanvas : GraphEdit
             Refresh();
         };
 
+        NodeSelected += selected =>
+        {
+            if (_cards.FirstOrDefault(kv => kv.Value == selected).Key is { } node)
+                CardSelected?.Invoke(node);
+        };
+
         _menu = new PopupMenu();
         _addMenu = new PopupMenu();
         _typeMenu = new PopupMenu();
@@ -85,7 +95,7 @@ public partial class GraphCanvas : GraphEdit
         AddChild(_menu);
 
         _renameEdit = new LineEdit { CustomMinimumSize = new Vector2(320, 0), SelectAllOnFocus = true };
-        _renameError = new Label { Modulate = new Color("ff5c6c") };
+        _renameError = new Label { Modulate = Palette.Error };
         var box = new VBoxContainer();
         box.AddChild(_renameEdit);
         box.AddChild(_renameError);
@@ -100,6 +110,20 @@ public partial class GraphCanvas : GraphEdit
             Refresh();
         };
         AddChild(_renameDialog);
+    }
+
+    /// <summary>Selects the card showing <paramref name="node"/> (or holding it, for a value) and scrolls it into the middle.</summary>
+    public void FocusNode(DocNode node)
+    {
+        var holder = node;
+        while (!_cards.ContainsKey(holder) && holder.Parent != null)
+            holder = holder.Parent;
+        if (!_cards.TryGetValue(holder, out var card))
+            return;
+
+        foreach (var other in _cards.Values)
+            other.Selected = other == card;
+        ScrollOffset = card.PositionOffset * Zoom - (Size - card.Size * Zoom) / 2;
     }
 
     public DocNode? NodeById(long id) => _ids.GetValueOrDefault(id);
@@ -268,32 +292,45 @@ public partial class GraphCanvas : GraphEdit
         if (Editor == null)
             return;
         var positions = _cards.ToDictionary(kv => kv.Key, kv => kv.Value.PositionOffset);
+        // Text applied from the text pane brings all-new nodes, so fall back to matching by path.
+        // Those old nodes are detached by now, so use the paths they had when their cards were built.
+        var byPath = _cards.ToDictionary(kv => _builtPaths[kv.Value], kv => kv.Value.PositionOffset);
         var heights = _cards.ToDictionary(kv => kv.Key, kv => kv.Value.Size.Y);
+        var heightsByPath = _cards.ToDictionary(kv => _builtPaths[kv.Value], kv => kv.Value.Size.Y);
         var (zoom, scroll) = (Zoom, ScrollOffset);
 
         Clear();
         BuildCard(Editor.Document.Root, _title);
         PlaceCard(Editor.Document.Root);
         foreach (var (node, card) in _cards)
-            if (heights.TryGetValue(node, out var before) && card.Size.Y > before)
+            if ((heights.TryGetValue(node, out var before) || heightsByPath.TryGetValue(_builtPaths[card], out before)) && card.Size.Y > before)
                 PushDown(card, before);
         RestoreView(zoom, scroll);
 
         void PlaceCard(DocNode node)
         {
             var card = _cards[node];
-            if (positions.TryGetValue(node, out var pos))
+            if (positions.TryGetValue(node, out var pos) || byPath.TryGetValue(node.Path, out pos))
             {
                 card.PositionOffset = pos;
             }
             else if (node.Parent is { } parent && _cards.TryGetValue(parent, out var parentCard))
             {
-                var row = parentCard.GetChild<Control>(node.IndexInParent + 1);
-                card.PositionOffset = parentCard.PositionOffset + new Vector2(parentCard.Size.X + ColumnGap, row.Position.Y);
+                card.PositionOffset = parentCard.PositionOffset + new Vector2(parentCard.Size.X + ColumnGap, RowTop(parentCard, node.IndexInParent + 1));
             }
             foreach (var child in node.Children.Where(c => c.IsContainer))
                 PlaceCard(child);
         }
+    }
+
+    /// <summary>How far down a card its row starts. Worked out from sizes, since rows aren't laid out until the next frame.</summary>
+    private static float RowTop(GraphNode card, int row)
+    {
+        var gap = card.GetThemeConstant("separation");
+        var top = 0f;
+        for (var i = 0; i < row && i < card.GetChildCount(); i++)
+            top += card.GetChild<Control>(i).GetCombinedMinimumSize().Y + gap;
+        return top;
     }
 
     /// <summary>When a card grows, moves the cards that were below it down by as much, so they don't overlap.</summary>
@@ -322,7 +359,7 @@ public partial class GraphCanvas : GraphEdit
     }
 
     public Dictionary<string, Vector2> CardPositions() =>
-        _cards.ToDictionary(kv => kv.Key.Path, kv => kv.Value.PositionOffset);
+        _cards.ToDictionary(kv => _builtPaths[kv.Value], kv => kv.Value.PositionOffset);
 
     public int CardCount => _cards.Count;
 
@@ -372,6 +409,7 @@ public partial class GraphCanvas : GraphEdit
         }
         _cards.Clear();
         _ids.Clear();
+        _builtPaths.Clear();
     }
 
     private GraphNode BuildCard(DocNode node, string? title = null)
@@ -384,7 +422,7 @@ public partial class GraphCanvas : GraphEdit
             TooltipText = node.Comment,
             Resizable = false,
         };
-        card.GetTitlebarHBox().AddChild(Badge(KindLabel(node), KindColor(node)));
+        card.GetTitlebarHBox().AddChild(Badge(Palette.KindLabel(node), Palette.KindColor(node)));
         card.GuiInput += e =>
         {
             if (e is InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true })
@@ -392,12 +430,13 @@ public partial class GraphCanvas : GraphEdit
         };
         AddChild(card);
         _cards[node] = card;
+        _builtPaths[card] = node.Path;
 
         // Row 0 is the summary, and takes the incoming connection from the parent card.
         var summary = new CardRow(this, node, isHeader: true);
         summary.AddChild(new Label { Text = Summary(node), Modulate = new Color(1, 1, 1, 0.55f) });
         card.AddChild(summary);
-        card.SetSlot(0, node.Parent != null, 0, KindColor(node), false, 0, Colors.White);
+        card.SetSlot(0, node.Parent != null, 0, Palette.KindColor(node), false, 0, Colors.White);
 
         var rightPort = 0;
         foreach (var child in node.Children)
@@ -409,7 +448,7 @@ public partial class GraphCanvas : GraphEdit
             if (!child.IsContainer)
                 continue;
 
-            card.SetSlot(row.GetIndex(), false, 0, Colors.White, true, 0, KindColor(child));
+            card.SetSlot(row.GetIndex(), false, 0, Colors.White, true, 0, Palette.KindColor(child));
             var childCard = BuildCard(child);
             ConnectNode(card.Name, rightPort++, childCard.Name, 0);
         }
@@ -433,10 +472,10 @@ public partial class GraphCanvas : GraphEdit
         var row = NewRow(child);
         row.AddChild(new Label
         {
-            Text = $"{KindLabel(child)} · {Count(child)}",
+            Text = $"{Palette.KindLabel(child)} · {Palette.Count(child)}",
             HorizontalAlignment = HorizontalAlignment.Right,
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            Modulate = KindColor(child),
+            Modulate = Palette.KindColor(child),
         });
         return row;
     }
@@ -464,7 +503,7 @@ public partial class GraphCanvas : GraphEdit
                 break;
             }
             case ValueKind.Null:
-                row.AddChild(new Label { Text = "null", SizeFlagsHorizontal = SizeFlags.ExpandFill, Modulate = KindColor(value) });
+                row.AddChild(new Label { Text = "null", SizeFlagsHorizontal = SizeFlags.ExpandFill, Modulate = Palette.KindColor(value) });
                 break;
             default:
             {
@@ -475,12 +514,12 @@ public partial class GraphCanvas : GraphEdit
                     PlaceholderText = value.ValueKind == ValueKind.Number ? "number" : "empty",
                     SelectAllOnFocus = true,
                 };
-                edit.AddThemeColorOverride("font_color", KindColor(value));
+                edit.AddThemeColorOverride("font_color", Palette.KindColor(value));
                 edit.TextChanged += text =>
                 {
                     // A value that doesn't fit its type isn't applied, so a save never writes broken data.
                     var error = DocumentEditor.ValidateValue(value, text);
-                    edit.AddThemeColorOverride("font_color", error == null ? KindColor(value) : new Color("ff5c6c"));
+                    edit.AddThemeColorOverride("font_color", error == null ? Palette.KindColor(value) : Palette.Error);
                     edit.TooltipText = error ?? "";
                     if (error == null)
                         Editor?.SetValue(value, text);
@@ -526,39 +565,7 @@ public partial class GraphCanvas : GraphEdit
         ? $"{node.Parent.Key ?? ""}[{node.IndexInParent}]"
         : node.Key ?? "";
 
-    private static string Summary(DocNode node) => $"{Count(node)}  ·  {node.Path}";
-
-    private static string Count(DocNode node)
-    {
-        var n = node.Children.Count;
-        return node.Kind switch
-        {
-            NodeKind.Array => n == 1 ? "1 item" : $"{n} items",
-            _ => n == 1 ? "1 key" : $"{n} keys",
-        };
-    }
-
-    private static string KindLabel(DocNode node) => node.Kind switch
-    {
-        NodeKind.Object => "obj",
-        NodeKind.Array => "arr",
-        NodeKind.Section => "section",
-        _ => node.ValueKind.ToString().ToLowerInvariant(),
-    };
-
-    private static Color KindColor(DocNode node) => node.Kind switch
-    {
-        NodeKind.Object => new Color("9d8cff"),
-        NodeKind.Section => new Color("9d8cff"),
-        NodeKind.Array => new Color("5cb8ff"),
-        _ => node.ValueKind switch
-        {
-            ValueKind.String => new Color("6fdc9a"),
-            ValueKind.Number => new Color("f0b450"),
-            ValueKind.Boolean => new Color("ff7eb6"),
-            _ => new Color("9a9aa8"),
-        },
-    };
+    private static string Summary(DocNode node) => $"{Palette.Count(node)}  ·  {node.Path}";
 
     private static int Depth(DocNode node)
     {

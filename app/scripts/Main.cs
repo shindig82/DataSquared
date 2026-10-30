@@ -7,13 +7,14 @@ using Godot;
 
 namespace DataSquared;
 
-/// <summary>The main window: toolbar, card canvas, a live preview of the file, and a status bar.</summary>
+/// <summary>The main window: toolbar, node tree, card canvas, the file as text, and a status bar.</summary>
 public partial class Main : Control
 {
     private const string FileFilters = "*.json, *.cfg, *.ini ; Data files";
 
+    private NodeTree _tree = null!;
     private GraphCanvas _canvas = null!;
-    private CodeEdit _preview = null!;
+    private TextPane _text = null!;
     private Label _status = null!;
     private FileDialog _openDialog = null!;
     private FileDialog _saveDialog = null!;
@@ -77,21 +78,24 @@ public partial class Main : Control
         toolbar.AddChild(new VSeparator());
         toolbar.AddChild(ToolButton("Auto layout", Key.L, false, () => _canvas.AutoLayout()));
 
-        var split = new HSplitContainer { SizeFlagsVertical = SizeFlags.ExpandFill };
-        root.AddChild(split);
+        var outer = new HSplitContainer { SizeFlagsVertical = SizeFlags.ExpandFill };
+        root.AddChild(outer);
+
+        _tree = new NodeTree { CustomMinimumSize = new Vector2(280, 0) };
+        _tree.NodePicked += node => _canvas.FocusNode(node);
+        outer.AddChild(_tree);
+
+        var inner = new HSplitContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        outer.AddChild(inner);
 
         _canvas = new GraphCanvas { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsStretchRatio = 3 };
         _canvas.Problem += ShowError;
-        split.AddChild(_canvas);
+        _canvas.CardSelected += node => _tree.SelectNode(node);
+        inner.AddChild(_canvas);
 
-        _preview = new CodeEdit
-        {
-            Editable = false,
-            GuttersDrawLineNumbers = true,
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(360, 0),
-        };
-        split.AddChild(_preview);
+        _text = new TextPane { SizeFlagsHorizontal = SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(360, 0) };
+        _text.Applied += () => _canvas.Refresh();
+        inner.AddChild(_text);
 
         var statusPanel = new PanelContainer();
         _status = new Label { Text = "" };
@@ -142,7 +146,8 @@ public partial class Main : Control
             _path = path;
             _canvas.Editor = _editor;
             _canvas.ShowDocument(doc, Path.GetFileName(path), LayoutStore.Load(path));
-            RefreshPreview();
+            _tree.ShowDocument(doc, Path.GetFileName(path));
+            _text.ShowDocument(_editor);
             UpdateChrome();
         }
         catch (Exception e) when (e is IOException or FormatException or UnauthorizedAccessException)
@@ -186,6 +191,9 @@ public partial class Main : Control
         var redo = key.Keycode == Key.Y || (key.Keycode == Key.Z && key.ShiftPressed);
         if (key.Keycode != Key.Z && !redo)
             return;
+        // While typing in the text pane, undo belongs to the text.
+        if (_text.HasTextFocus)
+            return;
 
         // Leave the text box first, so it doesn't keep showing a value the undo just replaced.
         GetViewport().GuiReleaseFocus();
@@ -207,17 +215,9 @@ public partial class Main : Control
 
     private void OnChanged()
     {
-        RefreshPreview();
+        _tree.QueueRebuild();
+        _text.DocumentChanged();
         UpdateChrome();
-    }
-
-    private void RefreshPreview()
-    {
-        if (_editor == null)
-            return;
-        var line = _preview.GetFirstVisibleLine();
-        _preview.Text = _editor.Document.Write();
-        _preview.SetLineAsFirstVisible(Math.Min(line, _preview.GetLineCount() - 1));
     }
 
     private void UpdateChrome()

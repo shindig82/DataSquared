@@ -203,6 +203,24 @@ public class DocumentEditorTests
     }
 
     [Fact]
+    public void ReplacingAllTextIsOneUndoableStep()
+    {
+        var editor = Json("{\"a\": 1}");
+        var oldA = editor.Document.Root.Children[0];
+
+        editor.ReplaceAll("[1, 2, {\"b\": true}]");
+        Assert.Equal(NodeKind.Array, editor.Document.Root.Kind);
+        Assert.Equal("[1, 2, {\"b\": true}]", Minify(editor.Document.Write()));
+
+        Assert.Throws<FormatException>(() => editor.ReplaceAll("[1, 2"));
+        Assert.Equal("[1, 2, {\"b\": true}]", Minify(editor.Document.Write()));
+
+        editor.Undo();
+        Assert.Equal("{\"a\": 1}", Minify(editor.Document.Write()));
+        Assert.Same(oldA, editor.Document.Root.Children[0]);
+    }
+
+    [Fact]
     public void ChangedFiresForEditsUndoAndRedo()
     {
         var editor = Json("{\"a\": 1}");
