@@ -28,6 +28,9 @@ public sealed class Document
 
     public bool EndsWithNewline { get; set; } = true;
 
+    /// <summary>JSON only: one level of indentation, as the file had it.</summary>
+    public string Indent { get; set; } = "  ";
+
     public static Document Parse(string text, DocumentFormat format) => format switch
     {
         DocumentFormat.Json => JsonFormat.Read(text),

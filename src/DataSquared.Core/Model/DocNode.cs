@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -62,11 +63,31 @@ public sealed class DocNode
     public static DocNode Scalar(string? key, ValueKind valueKind, string text) =>
         new() { Kind = NodeKind.Value, Key = key, ValueKind = valueKind, Text = text };
 
-    public DocNode Add(DocNode child)
+    public DocNode Add(DocNode child) => Insert(Children.Count, child);
+
+    public DocNode Insert(int index, DocNode child)
     {
+        if (child.Parent != null)
+            throw new InvalidOperationException("The node already has a parent.");
         child.Parent = this;
-        Children.Add(child);
+        Children.Insert(index, child);
         return child;
+    }
+
+    public void Remove(DocNode child)
+    {
+        if (child.Parent != this)
+            throw new InvalidOperationException("The node isn't a child of this one.");
+        Children.Remove(child);
+        child.Parent = null;
+    }
+
+    public bool IsAncestorOf(DocNode node)
+    {
+        for (var p = node.Parent; p != null; p = p.Parent)
+            if (p == this)
+                return true;
+        return false;
     }
 
     public int IndexInParent => Parent?.Children.IndexOf(this) ?? -1;

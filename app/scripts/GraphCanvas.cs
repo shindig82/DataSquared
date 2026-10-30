@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
+using DataSquared.Core.Editing;
 using DataSquared.Core.Model;
 using Godot;
 
@@ -20,8 +20,10 @@ public partial class GraphCanvas : GraphEdit
     private readonly Dictionary<DocNode, GraphNode> _cards = new();
     private int _nextCardId;
 
-    /// <summary>Raised after any value changes on a card.</summary>
-    public event Action? Edited;
+    /// <summary>Every change made on a card goes through this, so it can be undone.</summary>
+    public DocumentEditor? Editor { get; set; }
+
+    private string _title = "";
 
     public override void _Ready()
     {
@@ -36,6 +38,7 @@ public partial class GraphCanvas : GraphEdit
 
     public void ShowDocument(Document doc, string title, LayoutStore.Saved? saved)
     {
+        _title = title;
         Clear();
         BuildCard(doc.Root, title);
         AutoLayout();
@@ -55,6 +58,14 @@ public partial class GraphCanvas : GraphEdit
             Zoom = zoom;
             ScrollOffset = scroll;
         }).CallDeferred();
+    }
+
+    /// <summary>Rebuilds every card from the document, keeping cards where they are. Used after undo and redo.</summary>
+    public void Refresh()
+    {
+        if (Editor == null)
+            return;
+        ShowDocument(Editor.Document, _title, new LayoutStore.Saved(CardPositions(), Zoom, ScrollOffset));
     }
 
     public Dictionary<string, Vector2> CardPositions() =>
@@ -178,9 +189,8 @@ public partial class GraphCanvas : GraphEdit
                 };
                 check.Toggled += on =>
                 {
-                    value.Text = on ? "true" : "false";
+                    Editor?.SetValue(value, on ? "true" : "false");
                     check.Text = value.Text;
-                    Edited?.Invoke();
                 };
                 row.AddChild(check);
                 break;
@@ -200,14 +210,12 @@ public partial class GraphCanvas : GraphEdit
                 edit.AddThemeColorOverride("font_color", KindColor(value));
                 edit.TextChanged += text =>
                 {
-                    // A number that doesn't parse isn't applied, so a save never writes broken data.
-                    var ok = value.ValueKind != ValueKind.Number
-                        || double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
-                    edit.AddThemeColorOverride("font_color", ok ? KindColor(value) : new Color("ff5c6c"));
-                    if (!ok)
-                        return;
-                    value.Text = text;
-                    Edited?.Invoke();
+                    // A value that doesn't fit its type isn't applied, so a save never writes broken data.
+                    var error = DocumentEditor.ValidateValue(value, text);
+                    edit.AddThemeColorOverride("font_color", error == null ? KindColor(value) : new Color("ff5c6c"));
+                    edit.TooltipText = error ?? "";
+                    if (error == null)
+                        Editor?.SetValue(value, text);
                 };
                 row.AddChild(edit);
                 break;
