@@ -11,7 +11,8 @@ config_version=5
 [application]
 
 config/name="DataSquared"
-config/description="Visual editor for JSON and INI data, with XML to come."
+config/description="Visual editor for JSON, XML and INI data."
+config/version="1.0"
 run/main_scene="res://Main.tscn"
 config/features=PackedStringArray("4.7", "C#", "GL Compatibility")
 run/low_processor_mode=true
