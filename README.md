@@ -8,19 +8,26 @@ Built with Godot 4.7.2 (.NET) and C#. Runs on Windows and Linux.
 
 ## Status
 
-Step 1 prototype. It opens and saves:
+Prototype, with the core editing model in place. It opens and saves:
 
-- **JSON**, including `//` and `/* */` comments. Saving re-indents with two spaces.
+- **JSON**, including `//` and `/* */` comments. Saving keeps the file's indentation (tabs or
+  spaces) and key order.
 - **INI / .cfg**, such as Fleetborne's `server.cfg`. An unedited file saves back byte for byte,
   and editing a value only changes that line. Repeated sections stay separate.
 
 XML is planned. The document model (`DocNode`) was designed to take it.
+
+All changes go through `DocumentEditor` in the core library: set a value, rename, add, delete,
+move and change type, each checked against the format's rules (an INI file can't nest objects,
+for example) and undoable. The app exposes value editing so far. The rest arrive on the cards in
+the next step.
 
 ## Using it
 
 - **Open**: Ctrl+O, the toolbar, drag a file onto the window, or pass it on the command line.
 - **Edit**: type into a value, or tick a checkbox. Hover a row to see its comment from the file.
   A number that doesn't parse turns red and isn't applied.
+- **Undo**: Ctrl+Z, and Ctrl+Y or Ctrl+Shift+Z to redo. Typing into one value undoes as one step.
 - **Layout**: drag cards anywhere. *Auto layout* (Ctrl+L) tidies them into a tree. Card positions
   are saved per file in Godot's user data folder, so your data files aren't touched.
 - **Save**: Ctrl+S, or Ctrl+Shift+S to save as. The right pane shows exactly what will be written.

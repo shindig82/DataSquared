@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 using DataSquared.Core.Model;
 
@@ -8,7 +9,7 @@ namespace DataSquared.Core.Formats;
 
 /// <summary>
 /// JSON, plus the // and /* */ comments many game tools allow. Key order, number text and comments
-/// are kept. Whitespace is not: a save writes the file with two-space indentation.
+/// are kept, and a save indents the way the file already was (two spaces for a minified file).
 /// </summary>
 public static class JsonFormat
 {
@@ -22,21 +23,40 @@ public static class JsonFormat
         if (!reader.AtEnd)
             throw reader.Error("Unexpected text after the end of the document");
 
-        var doc = new Document(DocumentFormat.Json, root) { Newline = Document.DetectNewline(text) };
+        var doc = new Document(DocumentFormat.Json, root)
+        {
+            Newline = Document.DetectNewline(text),
+            Indent = DetectIndent(text),
+            EndsWithNewline = text.Length == 0 || text.EndsWith('\n'),
+        };
         root.TrailingTrivia.AddRange(trailing);
         return doc;
     }
 
     public static string Write(Document doc)
     {
-        var w = new Writer(doc.Newline);
+        var w = new Writer(doc.Newline, doc.Indent);
         foreach (var line in doc.Root.LeadingTrivia)
             w.Line(line);
         w.Value(doc.Root, 0);
-        w.EndLine();
+        if (doc.EndsWithNewline || doc.Root.TrailingTrivia.Count > 0)
+            w.EndLine();
         foreach (var line in doc.Root.TrailingTrivia)
             w.Line(line);
         return w.ToString();
+    }
+
+    /// <summary>The whitespace before the first indented line, such as two spaces or a tab. Minified files get two spaces.</summary>
+    private static string DetectIndent(string text)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        foreach (var line in lines.Skip(1))
+        {
+            var trimmed = line.TrimStart(' ', '\t');
+            if (trimmed.Length > 0 && trimmed.Length < line.Length)
+                return line[..(line.Length - trimmed.Length)];
+        }
+        return "  ";
     }
 
     public static ValueKind InferKind(string text) => text switch
@@ -226,8 +246,15 @@ public static class JsonFormat
     {
         private readonly StringBuilder _sb = new();
         private readonly string _newline;
+        private readonly string _indent;
 
-        public Writer(string newline) => _newline = newline;
+        public Writer(string newline, string indent)
+        {
+            _newline = newline;
+            _indent = indent;
+        }
+
+        private string IndentFor(int depth) => string.Concat(Enumerable.Repeat(_indent, depth));
 
         public void Line(string text) => _sb.Append(text).Append(_newline);
 
@@ -258,7 +285,7 @@ public static class JsonFormat
                 return;
             }
 
-            var indent = new string(' ', (depth + 1) * 2);
+            var indent = IndentFor(depth + 1);
             _sb.Append(open).Append(_newline);
             for (var k = 0; k < node.Children.Count; k++)
             {
@@ -275,7 +302,7 @@ public static class JsonFormat
             }
             foreach (var comment in node.TrailingTrivia)
                 _sb.Append(indent).Append(comment).Append(_newline);
-            _sb.Append(' ', depth * 2).Append(close);
+            _sb.Append(IndentFor(depth)).Append(close);
         }
 
         public override string ToString() => _sb.ToString();

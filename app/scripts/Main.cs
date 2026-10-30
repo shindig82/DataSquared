@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using DataSquared.Core.Editing;
 using DataSquared.Core.Model;
 using Godot;
 
@@ -19,9 +20,10 @@ public partial class Main : Control
     private ConfirmationDialog _discardDialog = null!;
     private AcceptDialog _errorDialog = null!;
 
-    private Document? _doc;
+    private DocumentEditor? _editor;
     private string? _path;
-    private bool _dirty;
+    private Button _undoButton = null!;
+    private Button _redoButton = null!;
     private Action? _afterDiscard;
 
     public override void _Ready()
@@ -65,13 +67,20 @@ public partial class Main : Control
         toolbar.AddChild(ToolButton("Save", Key.S, false, Save));
         toolbar.AddChild(ToolButton("Save As", Key.S, true, () => _saveDialog.PopupCentered(new Vector2I(900, 600))));
         toolbar.AddChild(new VSeparator());
+        // Undo and redo are handled in _Input, ahead of text boxes, so they always act on the document.
+        _undoButton = new Button { Text = "Undo", Flat = true };
+        _undoButton.Pressed += Undo;
+        toolbar.AddChild(_undoButton);
+        _redoButton = new Button { Text = "Redo", Flat = true };
+        _redoButton.Pressed += Redo;
+        toolbar.AddChild(_redoButton);
+        toolbar.AddChild(new VSeparator());
         toolbar.AddChild(ToolButton("Auto layout", Key.L, false, () => _canvas.AutoLayout()));
 
         var split = new HSplitContainer { SizeFlagsVertical = SizeFlags.ExpandFill };
         root.AddChild(split);
 
         _canvas = new GraphCanvas { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsStretchRatio = 3 };
-        _canvas.Edited += OnEdited;
         split.AddChild(_canvas);
 
         _preview = new CodeEdit
@@ -126,10 +135,12 @@ public partial class Main : Control
     {
         try
         {
-            _doc = Document.Load(path);
+            var doc = Document.Load(path);
+            _editor = new DocumentEditor(doc);
+            _editor.Changed += OnChanged;
             _path = path;
-            _dirty = false;
-            _canvas.ShowDocument(_doc, Path.GetFileName(path), LayoutStore.Load(path));
+            _canvas.Editor = _editor;
+            _canvas.ShowDocument(doc, Path.GetFileName(path), LayoutStore.Load(path));
             RefreshPreview();
             UpdateChrome();
         }
@@ -141,7 +152,7 @@ public partial class Main : Control
 
     private void Save()
     {
-        if (_doc == null)
+        if (_editor == null)
             return;
         if (_path == null)
             _saveDialog.PopupCentered(new Vector2I(900, 600));
@@ -151,13 +162,13 @@ public partial class Main : Control
 
     private void SaveTo(string path)
     {
-        if (_doc == null)
+        if (_editor == null)
             return;
         try
         {
-            _doc.Save(path);
+            _editor.Document.Save(path);
+            _editor.MarkSaved();
             _path = path;
-            _dirty = false;
             LayoutStore.Save(path, _canvas.CardPositions(), _canvas.Zoom, _canvas.ScrollOffset);
             UpdateChrome();
         }
@@ -167,35 +178,67 @@ public partial class Main : Control
         }
     }
 
-    private void OnEdited()
+    public override void _Input(InputEvent e)
     {
-        _dirty = true;
+        if (e is not InputEventKey { Pressed: true } key || !key.IsCommandOrControlPressed())
+            return;
+        var redo = key.Keycode == Key.Y || (key.Keycode == Key.Z && key.ShiftPressed);
+        if (key.Keycode != Key.Z && !redo)
+            return;
+
+        // Leave the text box first, so it doesn't keep showing a value the undo just replaced.
+        GetViewport().GuiReleaseFocus();
+        if (redo) Redo(); else Undo();
+        GetViewport().SetInputAsHandled();
+    }
+
+    private void Undo()
+    {
+        if (_editor?.Undo() == true)
+            _canvas.Refresh();
+    }
+
+    private void Redo()
+    {
+        if (_editor?.Redo() == true)
+            _canvas.Refresh();
+    }
+
+    private void OnChanged()
+    {
         RefreshPreview();
         UpdateChrome();
     }
 
     private void RefreshPreview()
     {
-        if (_doc == null)
+        if (_editor == null)
             return;
         var line = _preview.GetFirstVisibleLine();
-        _preview.Text = _doc.Write();
+        _preview.Text = _editor.Document.Write();
         _preview.SetLineAsFirstVisible(Math.Min(line, _preview.GetLineCount() - 1));
     }
 
     private void UpdateChrome()
     {
         var name = _path == null ? "No file" : Path.GetFileName(_path);
-        GetWindow().Title = $"DataSquared — {name}{(_dirty ? " •" : "")}";
+        var dirty = _editor?.IsDirty == true;
+        GetWindow().Title = $"DataSquared — {name}{(dirty ? " •" : "")}";
 
-        _status.Text = _doc == null
+        _undoButton.Disabled = _editor?.CanUndo != true;
+        _undoButton.TooltipText = _editor?.UndoDescription is { } undo ? $"Undo {undo} (Ctrl+Z)" : "Nothing to undo";
+        _redoButton.Disabled = _editor?.CanRedo != true;
+        _redoButton.TooltipText = _editor?.RedoDescription is { } redo ? $"Redo {redo} (Ctrl+Y)" : "Nothing to redo";
+
+        var doc = _editor?.Document;
+        _status.Text = doc == null
             ? "  Open a .json, .cfg or .ini file, or drop one on the window."
-            : $"  {_doc.Format.ToString().ToUpperInvariant()}  ·  {_canvas.CardCount} cards  ·  {_doc.Root.Descendants().Count()} nodes  ·  {_path}  ·  {(_dirty ? "Unsaved" : "Saved")}";
+            : $"  {doc.Format.ToString().ToUpperInvariant()}  ·  {_canvas.CardCount} cards  ·  {doc.Root.Descendants().Count()} nodes  ·  {_path}  ·  {(dirty ? "Unsaved" : "Saved")}";
     }
 
     private void ConfirmDiscard(Action then)
     {
-        if (!_dirty)
+        if (_editor?.IsDirty != true)
         {
             then();
             return;

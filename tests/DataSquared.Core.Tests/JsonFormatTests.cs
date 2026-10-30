@@ -21,7 +21,16 @@ public class JsonFormatTests
     public void MinifiedFileIsFormattedAndKeepsKeyOrderAndNumberText()
     {
         var doc = Document.Parse("{\"b\":1.50,\"a\":[1,2e3],\"c\":{}}", DocumentFormat.Json);
-        Assert.Equal("{\n  \"b\": 1.50,\n  \"a\": [\n    1,\n    2e3\n  ],\n  \"c\": {}\n}\n", doc.Write());
+        Assert.Equal("{\n  \"b\": 1.50,\n  \"a\": [\n    1,\n    2e3\n  ],\n  \"c\": {}\n}", doc.Write());
+    }
+
+    [Theory]
+    [InlineData("\t")]
+    [InlineData("    ")]
+    public void IndentationIsKept(string indent)
+    {
+        var text = $"{{\n{indent}\"a\": [\n{indent}{indent}1\n{indent}]\n}}\n";
+        Assert.Equal(text, Document.Parse(text, DocumentFormat.Json).Write());
     }
 
     [Fact]
