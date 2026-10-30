@@ -96,6 +96,9 @@ public partial class Main : Control
         toolbar.AddChild(new VSeparator());
         toolbar.AddChild(ToolButton("Auto layout", Key.L, false, () => _canvas.AutoLayout()));
         toolbar.AddChild(ToolButton("Fit", Key.Key0, false, () => _canvas.FitToView()));
+        var comments = new CheckButton { Text = "Comments", ButtonPressed = true, Flat = true, TooltipText = "Show comments from the file under their rows" };
+        comments.Toggled += on => _canvas.ShowComments = on;
+        toolbar.AddChild(comments);
         toolbar.AddChild(new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill });
         _search = new SearchBar();
         _search.Jump += node =>

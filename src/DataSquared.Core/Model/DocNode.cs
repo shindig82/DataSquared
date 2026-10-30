@@ -132,30 +132,47 @@ public sealed class DocNode
         }
     }
 
-    /// <summary>This node's comment lines with their markers stripped, for showing as help text.</summary>
+    /// <summary>
+    /// Where this node's own comment starts in <see cref="LeadingTrivia"/>: the run of comment lines
+    /// directly above it. A comment separated by a blank line, such as a file header, isn't counted.
+    /// </summary>
+    public int CommentStart
+    {
+        get
+        {
+            var start = LeadingTrivia.Count;
+            while (start > 0 && IsCommentLine(LeadingTrivia[start - 1]))
+                start--;
+            return start;
+        }
+    }
+
+    /// <summary>This node's comment with its markers stripped, for showing and editing as plain text.</summary>
     public string Comment
     {
         get
         {
             var lines = new List<string>();
-            var inXml = false;
-            foreach (var raw in LeadingTrivia)
+            for (var i = CommentStart; i < LeadingTrivia.Count; i++)
             {
-                var line = raw.Trim();
-                var isComment = inXml || line.StartsWith("<!--") || line.StartsWith(';') || line.StartsWith('#')
-                    || line.StartsWith("//") || line.StartsWith("/*") || line.StartsWith('*');
-                if (line.StartsWith("<!--"))
-                    inXml = true;
-                if (line.EndsWith("-->"))
-                    inXml = false;
-                if (!isComment)
-                    continue;
+                var line = LeadingTrivia[i].Trim();
                 if (line.StartsWith("<!--")) line = line[4..];
                 if (line.EndsWith("-->")) line = line[..^3];
-                lines.Add(line.TrimStart(';', '#', '/', '*').TrimEnd('/', '*').Trim());
+                if (line.StartsWith("/*")) line = line[2..];
+                if (line.EndsWith("*/")) line = line[..^2];
+                if (line.StartsWith("//")) line = line[2..];
+                else if (line.StartsWith(';') || line.StartsWith('#') || line.StartsWith('*')) line = line[1..];
+                lines.Add(line.Trim());
             }
-            return string.Join("\n", lines).Trim();
+            return string.Join("\n", lines).Trim('\n');
         }
+    }
+
+    /// <summary>Anything that isn't blank, an XML declaration or a doctype counts as part of a comment.</summary>
+    private static bool IsCommentLine(string line)
+    {
+        var t = line.Trim();
+        return t.Length > 0 && !t.StartsWith("<?") && !t.StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase);
     }
 
     public IEnumerable<DocNode> Descendants()
