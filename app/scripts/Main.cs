@@ -81,6 +81,7 @@ public partial class Main : Control
         root.AddChild(split);
 
         _canvas = new GraphCanvas { SizeFlagsHorizontal = SizeFlags.ExpandFill, SizeFlagsStretchRatio = 3 };
+        _canvas.Problem += ShowError;
         split.AddChild(_canvas);
 
         _preview = new CodeEdit

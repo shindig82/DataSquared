@@ -186,6 +186,23 @@ public class DocumentEditorTests
     }
 
     [Fact]
+    public void DuplicateCopiesDeeplyAfterTheOriginal()
+    {
+        var editor = Json("{\"a\": {\"x\": [1, 2]}, \"b\": 3, \"list\": [{\"y\": 1}]}");
+        var a = Find(editor, "$/a");
+
+        var copy = editor.Duplicate(a);
+        editor.SetValue(copy.Children[0].Children[0], "9");
+        editor.Duplicate(Find(editor, "$/list/0"));
+
+        Assert.Equal("{\"a\": {\"x\": [1, 2]}, \"a_2\": {\"x\": [9, 2]}, \"b\": 3, \"list\": [{\"y\": 1}, {\"y\": 1}]}", Minify(editor.Document.Write()));
+        editor.Undo();
+        editor.Undo();
+        editor.Undo();
+        Assert.Equal(3, editor.Document.Root.Children.Count);
+    }
+
+    [Fact]
     public void ChangedFiresForEditsUndoAndRedo()
     {
         var editor = Json("{\"a\": 1}");

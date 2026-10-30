@@ -17,13 +17,48 @@ public partial class GraphCanvas : GraphEdit
     private const float ColumnGap = 90;
     private const float RowGap = 28;
 
+    private static readonly (string Label, NodeKind Kind, ValueKind ValueKind)[] Types =
+    {
+        ("String", NodeKind.Value, ValueKind.String),
+        ("Number", NodeKind.Value, ValueKind.Number),
+        ("Boolean", NodeKind.Value, ValueKind.Boolean),
+        ("Null", NodeKind.Value, ValueKind.Null),
+        ("Object", NodeKind.Object, ValueKind.None),
+        ("Array", NodeKind.Array, ValueKind.None),
+        ("Section", NodeKind.Section, ValueKind.None),
+    };
+
+    private enum MenuId
+    {
+        Rename = 1,
+        Duplicate,
+        MoveUp,
+        MoveDown,
+        Delete,
+        Add = 100,
+        ChangeType = 200,
+    }
+
     private readonly Dictionary<DocNode, GraphNode> _cards = new();
+    private readonly Dictionary<long, DocNode> _ids = new();
     private int _nextCardId;
+    private string _title = "";
+
+    private PopupMenu _menu = null!;
+    private PopupMenu _addMenu = null!;
+    private PopupMenu _typeMenu = null!;
+    private DocNode? _menuTarget;
+
+    private ConfirmationDialog _renameDialog = null!;
+    private LineEdit _renameEdit = null!;
+    private Label _renameError = null!;
+    private DocNode? _renaming;
 
     /// <summary>Every change made on a card goes through this, so it can be undone.</summary>
     public DocumentEditor? Editor { get; set; }
 
-    private string _title = "";
+    /// <summary>Raised with a message when an edit is refused, such as a duplicate name.</summary>
+    public event Action<string>? Problem;
 
     public override void _Ready()
     {
@@ -31,9 +66,180 @@ public partial class GraphCanvas : GraphEdit
         MinimapEnabled = true;
         RightDisconnects = false;
         ShowArrangeButton = false;
-        // Connections mirror the data's structure, so they can't be rewired by hand yet.
+        // Connections mirror the data's structure, so they're changed by moving rows, not rewiring.
         ConnectionRequest += (_, _, _, _) => { };
-        DeleteNodesRequest += _ => { };
+        DeleteNodesRequest += names =>
+        {
+            foreach (var name in names)
+                if (_cards.FirstOrDefault(kv => kv.Value.Name == name).Key is { Parent: not null } node)
+                    Try(() => Editor?.Remove(node));
+            Refresh();
+        };
+
+        _menu = new PopupMenu();
+        _addMenu = new PopupMenu();
+        _typeMenu = new PopupMenu();
+        _menu.IdPressed += id => OnMenu((MenuId)id);
+        _addMenu.IdPressed += id => OnMenu((MenuId)id);
+        _typeMenu.IdPressed += id => OnMenu((MenuId)id);
+        AddChild(_menu);
+
+        _renameEdit = new LineEdit { CustomMinimumSize = new Vector2(320, 0), SelectAllOnFocus = true };
+        _renameError = new Label { Modulate = new Color("ff5c6c") };
+        var box = new VBoxContainer();
+        box.AddChild(_renameEdit);
+        box.AddChild(_renameError);
+        _renameDialog = new ConfirmationDialog { Title = "Rename" };
+        _renameDialog.AddChild(box);
+        _renameDialog.RegisterTextEnter(_renameEdit);
+        _renameEdit.TextChanged += ValidateRename;
+        _renameDialog.Confirmed += () =>
+        {
+            if (_renaming is { } node)
+                Try(() => Editor?.Rename(node, _renameEdit.Text));
+            Refresh();
+        };
+        AddChild(_renameDialog);
+    }
+
+    public DocNode? NodeById(long id) => _ids.GetValueOrDefault(id);
+
+    public bool CanMove(DocNode node, DocNode parent, int index) =>
+        Editor != null && node.Parent != null && node != parent && !node.IsAncestorOf(parent)
+        && Editor.CannotHold(parent, node.Kind, node.ValueKind) == null;
+
+    public void Move(DocNode node, DocNode parent, int index)
+    {
+        Try(() => Editor?.Move(node, parent, index));
+        Refresh();
+    }
+
+    public void OpenMenu(DocNode target)
+    {
+        if (Editor == null)
+            return;
+        _menuTarget = target;
+        _menu.Clear();
+        _addMenu.Clear();
+        _typeMenu.Clear();
+        if (_addMenu.GetParent() != null) _menu.RemoveChild(_addMenu);
+        if (_typeMenu.GetParent() != null) _menu.RemoveChild(_typeMenu);
+
+        if (target.IsContainer)
+        {
+            for (var i = 0; i < Types.Length; i++)
+                if (Editor.CannotHold(target, Types[i].Kind, Types[i].ValueKind) == null)
+                    _addMenu.AddItem(Types[i].Label, (int)MenuId.Add + i);
+            if (_addMenu.ItemCount > 0)
+                _menu.AddSubmenuNodeItem("Add", _addMenu);
+        }
+
+        if (target.Parent is { } parent)
+        {
+            if (_menu.ItemCount > 0)
+                _menu.AddSeparator();
+            if (parent.Kind != NodeKind.Array)
+                _menu.AddItem("Rename…", (int)MenuId.Rename);
+
+            if (target.Kind != NodeKind.Section)
+            {
+                for (var i = 0; i < Types.Length; i++)
+                {
+                    var (label, kind, valueKind) = Types[i];
+                    if (kind == NodeKind.Section || Editor.CannotHold(parent, kind, valueKind) != null)
+                        continue;
+                    _typeMenu.AddRadioCheckItem(label, (int)MenuId.ChangeType + i);
+                    _typeMenu.SetItemChecked(_typeMenu.ItemCount - 1, kind == target.Kind && valueKind == target.ValueKind);
+                }
+                _menu.AddSubmenuNodeItem("Change type", _typeMenu);
+            }
+
+            _menu.AddItem("Duplicate", (int)MenuId.Duplicate);
+            _menu.AddItem("Move up", (int)MenuId.MoveUp);
+            _menu.SetItemDisabled(_menu.ItemCount - 1, target.IndexInParent == 0);
+            _menu.AddItem("Move down", (int)MenuId.MoveDown);
+            _menu.SetItemDisabled(_menu.ItemCount - 1, target.IndexInParent == parent.Children.Count - 1);
+            _menu.AddSeparator();
+            _menu.AddItem("Delete", (int)MenuId.Delete);
+        }
+
+        if (_menu.ItemCount == 0)
+            return;
+        _menu.Position = DisplayServer.MouseGetPosition();
+        _menu.ResetSize();
+        _menu.Popup();
+    }
+
+    private void OnMenu(MenuId id)
+    {
+        if (Editor == null || _menuTarget is not { } node)
+            return;
+
+        switch (id)
+        {
+            case MenuId.Rename:
+                StartRename(node);
+                return;
+            case MenuId.Duplicate:
+                Try(() => Editor.Duplicate(node));
+                break;
+            case MenuId.MoveUp:
+                Try(() => Editor.Move(node, node.Parent!, node.IndexInParent - 1));
+                break;
+            case MenuId.MoveDown:
+                Try(() => Editor.Move(node, node.Parent!, node.IndexInParent + 1));
+                break;
+            case MenuId.Delete:
+                Try(() => Editor.Remove(node));
+                break;
+            case >= MenuId.ChangeType:
+            {
+                var (_, kind, valueKind) = Types[id - MenuId.ChangeType];
+                Try(() => Editor.ChangeType(node, kind, valueKind));
+                break;
+            }
+            case >= MenuId.Add:
+            {
+                var (_, kind, valueKind) = Types[id - MenuId.Add];
+                DocNode? added = null;
+                Try(() => added = Editor.Add(node, kind, valueKind));
+                Refresh();
+                // A new key starts with a placeholder name, so ask for a real one straight away.
+                if (added?.Key != null)
+                    StartRename(added);
+                return;
+            }
+        }
+        Refresh();
+    }
+
+    private void StartRename(DocNode node)
+    {
+        _renaming = node;
+        _renameDialog.Title = $"Rename {node.Key}";
+        _renameEdit.Text = node.Key ?? "";
+        ValidateRename(_renameEdit.Text);
+        _renameDialog.PopupCentered();
+        _renameEdit.GrabFocus();
+    }
+
+    private void ValidateRename(string text)
+    {
+        var error = _renaming == null || Editor == null ? null : Editor.ValidateKey(_renaming, text);
+        _renameError.Text = error ?? "";
+        _renameDialog.GetOkButton().Disabled = error != null;
+    }
+
+    private void Try(Action action)
+    {
+        try
+        {
+            action();
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        {
+            Problem?.Invoke(e.Message);
+        }
     }
 
     public void ShowDocument(Document doc, string title, LayoutStore.Saved? saved)
@@ -50,22 +256,69 @@ public partial class GraphCanvas : GraphEdit
                     card.PositionOffset = pos;
         }
 
+        RestoreView(saved?.Zoom ?? 1, saved?.Scroll ?? new Vector2(-40, -80));
+    }
+
+    /// <summary>
+    /// Rebuilds every card from the document after a change. Cards stay where they were, even if
+    /// renamed or moved, and a new card appears beside its parent.
+    /// </summary>
+    public void Refresh()
+    {
+        if (Editor == null)
+            return;
+        var positions = _cards.ToDictionary(kv => kv.Key, kv => kv.Value.PositionOffset);
+        var heights = _cards.ToDictionary(kv => kv.Key, kv => kv.Value.Size.Y);
+        var (zoom, scroll) = (Zoom, ScrollOffset);
+
+        Clear();
+        BuildCard(Editor.Document.Root, _title);
+        PlaceCard(Editor.Document.Root);
+        foreach (var (node, card) in _cards)
+            if (heights.TryGetValue(node, out var before) && card.Size.Y > before)
+                PushDown(card, before);
+        RestoreView(zoom, scroll);
+
+        void PlaceCard(DocNode node)
+        {
+            var card = _cards[node];
+            if (positions.TryGetValue(node, out var pos))
+            {
+                card.PositionOffset = pos;
+            }
+            else if (node.Parent is { } parent && _cards.TryGetValue(parent, out var parentCard))
+            {
+                var row = parentCard.GetChild<Control>(node.IndexInParent + 1);
+                card.PositionOffset = parentCard.PositionOffset + new Vector2(parentCard.Size.X + ColumnGap, row.Position.Y);
+            }
+            foreach (var child in node.Children.Where(c => c.IsContainer))
+                PlaceCard(child);
+        }
+    }
+
+    /// <summary>When a card grows, moves the cards that were below it down by as much, so they don't overlap.</summary>
+    private void PushDown(GraphNode grown, float oldHeight)
+    {
+        var growth = grown.Size.Y - oldHeight;
+        var oldBottom = grown.PositionOffset.Y + oldHeight;
+        var left = grown.PositionOffset.X;
+        var right = left + grown.Size.X;
+        foreach (var card in _cards.Values)
+        {
+            var x = card.PositionOffset.X;
+            if (card != grown && card.PositionOffset.Y >= oldBottom - 1 && x < right && x + card.Size.X > left)
+                card.PositionOffset += new Vector2(0, growth);
+        }
+    }
+
+    private void RestoreView(float zoom, Vector2 scroll)
+    {
         // Scrolling only sticks once the new cards have been laid out, so wait a frame.
-        var zoom = saved?.Zoom ?? 1;
-        var scroll = saved?.Scroll ?? new Vector2(-40, -80);
         Callable.From(() =>
         {
             Zoom = zoom;
             ScrollOffset = scroll;
         }).CallDeferred();
-    }
-
-    /// <summary>Rebuilds every card from the document, keeping cards where they are. Used after undo and redo.</summary>
-    public void Refresh()
-    {
-        if (Editor == null)
-            return;
-        ShowDocument(Editor.Document, _title, new LayoutStore.Saved(CardPositions(), Zoom, ScrollOffset));
     }
 
     public Dictionary<string, Vector2> CardPositions() =>
@@ -118,6 +371,7 @@ public partial class GraphCanvas : GraphEdit
             card.QueueFree();
         }
         _cards.Clear();
+        _ids.Clear();
     }
 
     private GraphNode BuildCard(DocNode node, string? title = null)
@@ -131,11 +385,17 @@ public partial class GraphCanvas : GraphEdit
             Resizable = false,
         };
         card.GetTitlebarHBox().AddChild(Badge(KindLabel(node), KindColor(node)));
+        card.GuiInput += e =>
+        {
+            if (e is InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true })
+                OpenMenu(node);
+        };
         AddChild(card);
         _cards[node] = card;
 
         // Row 0 is the summary, and takes the incoming connection from the parent card.
-        var summary = new Label { Text = Summary(node), Modulate = new Color(1, 1, 1, 0.55f) };
+        var summary = new CardRow(this, node, isHeader: true);
+        summary.AddChild(new Label { Text = Summary(node), Modulate = new Color(1, 1, 1, 0.55f) });
         card.AddChild(summary);
         card.SetSlot(0, node.Parent != null, 0, KindColor(node), false, 0, Colors.White);
 
@@ -158,10 +418,19 @@ public partial class GraphCanvas : GraphEdit
         return card;
     }
 
-    private static Control ContainerRow(DocNode child)
+    private CardRow NewRow(DocNode node)
     {
-        var row = new HBoxContainer();
-        row.AddChild(KeyLabel(child));
+        var id = _ids.Count + 1L;
+        _ids[id] = node;
+        var row = new CardRow(this, node, isHeader: false);
+        row.AddChild(new DragHandle(id, node.Key ?? $"[{node.IndexInParent}]"));
+        row.AddChild(KeyLabel(node));
+        return row;
+    }
+
+    private Control ContainerRow(DocNode child)
+    {
+        var row = NewRow(child);
         row.AddChild(new Label
         {
             Text = $"{KindLabel(child)} · {Count(child)}",
@@ -174,8 +443,7 @@ public partial class GraphCanvas : GraphEdit
 
     private Control ValueRow(DocNode value)
     {
-        var row = new HBoxContainer();
-        row.AddChild(KeyLabel(value));
+        var row = NewRow(value);
 
         switch (value.ValueKind)
         {
@@ -225,13 +493,27 @@ public partial class GraphCanvas : GraphEdit
         return row;
     }
 
-    private static Label KeyLabel(DocNode node) => new()
+    private Label KeyLabel(DocNode node)
     {
-        Text = node.Key ?? $"[{node.IndexInParent}]",
-        CustomMinimumSize = new Vector2(120, 0),
-        ClipText = true,
-        TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
-    };
+        var label = new Label
+        {
+            Text = node.Key ?? $"[{node.IndexInParent}]",
+            CustomMinimumSize = new Vector2(120, 0),
+            ClipText = true,
+            TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
+        };
+        if (node.Key != null)
+        {
+            // Double-click a name to rename it, as on the reference editor.
+            label.MouseFilter = MouseFilterEnum.Pass;
+            label.GuiInput += e =>
+            {
+                if (e is InputEventMouseButton { ButtonIndex: MouseButton.Left, DoubleClick: true })
+                    StartRename(node);
+            };
+        }
+        return label;
+    }
 
     private static Control Badge(string text, Color color)
     {
@@ -244,11 +526,7 @@ public partial class GraphCanvas : GraphEdit
         ? $"{node.Parent.Key ?? ""}[{node.IndexInParent}]"
         : node.Key ?? "";
 
-    private static string Summary(DocNode node)
-    {
-        var path = node.Path;
-        return $"{Count(node)}  ·  {path}";
-    }
+    private static string Summary(DocNode node) => $"{Count(node)}  ·  {node.Path}";
 
     private static string Count(DocNode node)
     {
