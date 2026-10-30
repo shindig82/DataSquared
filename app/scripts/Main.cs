@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using DataSquared.Core.Editing;
 using DataSquared.Core.Model;
+using DataSquared.Core.Platform;
 using DataSquared.Core.Schema;
 using Godot;
 
@@ -44,8 +45,15 @@ public partial class Main : Control
         GetTree().AutoAcceptQuit = false;
         GetWindow().FilesDropped += files => ConfirmDiscard(() => Open(files[0]));
 
-        var args = OS.GetCmdlineUserArgs();
-        var file = args.FirstOrDefault(a => !a.StartsWith("--"));
+        // A file opened from the desktop arrives as a plain argument; one passed after "--" works too.
+        var args = OS.GetCmdlineArgs().Concat(OS.GetCmdlineUserArgs()).ToList();
+        if (args.FirstOrDefault(a => a == "--unregister" || a == "--register" || a.StartsWith("--register=")) is { } command)
+        {
+            SetDefaultApp(command);
+            return;
+        }
+
+        var file = args.FirstOrDefault(a => !a.StartsWith('-'));
         if (file != null)
             Open(file);
         else
@@ -54,6 +62,54 @@ public partial class Main : Control
         var shot = args.FirstOrDefault(a => a.StartsWith("--screenshot="));
         if (shot != null)
             CaptureAndQuit(shot["--screenshot=".Length..]);
+    }
+
+    /// <summary>
+    /// Runs --register[=json,cfg,...] or --unregister: makes this program the one that opens data files,
+    /// says what happened, then quits.
+    /// </summary>
+    private void SetDefaultApp(string command)
+    {
+        string message;
+        var failed = false;
+        if (!OS.HasFeature("template"))
+        {
+            message = "Run this from an exported DataSquared build, not from the Godot editor, so files open with DataSquared itself.";
+            failed = true;
+        }
+        else
+        {
+            try
+            {
+                var associations = new FileAssociations(OS.GetExecutablePath());
+                var lines = command == "--unregister"
+                    ? associations.Unregister()
+                    : associations.Register(FileAssociations.ParseExtensions(command.Contains('=') ? command[(command.IndexOf('=') + 1)..] : null));
+                message = string.Join("\n", lines);
+            }
+            catch (Exception e) when (e is ArgumentException or IOException or UnauthorizedAccessException or PlatformNotSupportedException or System.Security.SecurityException)
+            {
+                message = e.Message;
+                failed = true;
+            }
+        }
+
+        if (failed)
+            GD.PrintErr(message);
+        else
+            GD.Print(message);
+
+        // A windowed program's output doesn't reach the console on Windows, so show it too.
+        if (DisplayServer.GetName() == "headless")
+        {
+            GetTree().Quit(failed ? 1 : 0);
+            return;
+        }
+        var dialog = new AcceptDialog { Title = "DataSquared", DialogText = message };
+        dialog.Confirmed += () => GetTree().Quit(failed ? 1 : 0);
+        dialog.Canceled += () => GetTree().Quit(failed ? 1 : 0);
+        AddChild(dialog);
+        dialog.PopupCentered();
     }
 
     public override void _Notification(int what)
