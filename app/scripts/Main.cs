@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using DataSquared.Core.Editing;
 using DataSquared.Core.Model;
+using DataSquared.Core.Schema;
 using Godot;
 
 namespace DataSquared;
@@ -22,6 +24,13 @@ public partial class Main : Control
     private FileDialog _saveDialog = null!;
     private ConfirmationDialog _discardDialog = null!;
     private AcceptDialog _errorDialog = null!;
+    private PopupMenu _schemaMenu = null!;
+    private FileDialog _schemaDialog = null!;
+    private Button _problemsButton = null!;
+    private JsonSchema? _schema;
+    private string? _schemaPath;
+    private IReadOnlyList<SchemaProblem> _problems = Array.Empty<SchemaProblem>();
+    private int _nextProblem;
 
     private DocumentEditor? _editor;
     private string? _path;
@@ -99,6 +108,34 @@ public partial class Main : Control
         var comments = new CheckButton { Text = "Comments", ButtonPressed = true, Flat = true, TooltipText = "Show comments from the file under their rows" };
         comments.Toggled += on => _canvas.ShowComments = on;
         toolbar.AddChild(comments);
+
+        _schemaMenu = new PopupMenu();
+        _schemaMenu.AddItem("Choose schema…", 0);
+        _schemaMenu.AddItem("Reload schema", 1);
+        _schemaMenu.AddItem("Remove schema", 2);
+        _schemaMenu.IdPressed += id =>
+        {
+            switch (id)
+            {
+                case 0:
+                    _schemaDialog.PopupCentered(new Vector2I(900, 600));
+                    break;
+                case 1:
+                    UseSchema(_schemaPath, remember: false);
+                    break;
+                case 2:
+                    UseSchema(null, remember: true);
+                    break;
+            }
+        };
+        AddChild(_schemaMenu);
+        toolbar.AddChild(ToolButton("Schema", Key.None, false, () =>
+        {
+            _schemaMenu.SetItemDisabled(1, _schemaPath == null);
+            _schemaMenu.SetItemDisabled(2, _schemaPath == null);
+            _schemaMenu.Position = DisplayServer.MouseGetPosition();
+            _schemaMenu.Popup();
+        }));
         toolbar.AddChild(new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill });
         _search = new SearchBar();
         _search.Jump += node =>
@@ -128,14 +165,23 @@ public partial class Main : Control
         inner.AddChild(_text);
 
         var statusPanel = new PanelContainer();
-        _status = new Label { Text = "" };
-        statusPanel.AddChild(_status);
+        var statusLine = new HBoxContainer();
+        _status = new Label { Text = "", SizeFlagsHorizontal = SizeFlags.ExpandFill, ClipText = true };
+        statusLine.AddChild(_status);
+        _problemsButton = ToolButton("", Key.F8, false, NextProblem);
+        _problemsButton.Visible = false;
+        _problemsButton.AddThemeColorOverride("font_color", Palette.Error);
+        statusLine.AddChild(_problemsButton);
+        statusPanel.AddChild(statusLine);
         root.AddChild(statusPanel);
 
         _openDialog = FileDialogFor(FileDialog.FileModeEnum.OpenFile);
         _openDialog.FileSelected += Open;
         _saveDialog = FileDialogFor(FileDialog.FileModeEnum.SaveFile);
         _saveDialog.FileSelected += SaveTo;
+        _schemaDialog = FileDialogFor(FileDialog.FileModeEnum.OpenFile);
+        _schemaDialog.Filters = new[] { "*.json ; JSON Schema", "* ; All files" };
+        _schemaDialog.FileSelected += path => UseSchema(path, remember: true);
 
         _discardDialog = new ConfirmationDialog { Title = "Unsaved changes", DialogText = "Discard your unsaved changes?", OkButtonText = "Discard" };
         _discardDialog.Confirmed += () => _afterDiscard?.Invoke();
@@ -160,8 +206,13 @@ public partial class Main : Control
 
     private static Button ToolButton(string text, Key key, bool shift, Action pressed)
     {
-        var shortcut = new InputEventKey { Keycode = key, CommandOrControlAutoremap = true, ShiftPressed = shift };
-        var button = new Button { Text = text, Flat = true, Shortcut = new Shortcut { Events = new() { shortcut } } };
+        var button = new Button { Text = text, Flat = true };
+        if (key != Key.None)
+        {
+            // Function keys work alone; letters need Ctrl (Cmd on macOS).
+            var shortcut = new InputEventKey { Keycode = key, CommandOrControlAutoremap = key is < Key.F1 or > Key.F12, ShiftPressed = shift };
+            button.Shortcut = new Shortcut { Events = new() { shortcut } };
+        }
         button.Pressed += pressed;
         return button;
     }
@@ -199,7 +250,74 @@ public partial class Main : Control
         _tree.ShowDocument(doc, title);
         _text.ShowDocument(_editor);
         _search.ShowDocument(doc);
+        UseSchema(FindSchema(path, doc), remember: false);
+    }
+
+    /// <summary>
+    /// The schema for a file: the one picked for it before, else a $schema path in a JSON file, else one
+    /// beside it named like server.schema.json or server.cfg.schema.json.
+    /// </summary>
+    private static string? FindSchema(string? path, Document doc)
+    {
+        if (path == null)
+            return null;
+        if (LayoutStore.LoadSchema(path) is { } picked && File.Exists(picked))
+            return picked;
+        var dir = Path.GetDirectoryName(Path.GetFullPath(path)) ?? "";
+        var named = doc.Format == DocumentFormat.Json
+            ? doc.Root.Children.FirstOrDefault(c => c.Key == "$schema" && c.Kind == NodeKind.Value)?.Text
+            : null;
+        var candidates = new[]
+        {
+            named != null && !named.Contains("://") ? Path.Combine(dir, named) : null,
+            Path.ChangeExtension(path, ".schema.json"),
+            path + ".schema.json",
+        };
+        return candidates.FirstOrDefault(c => c != null && File.Exists(c) && Path.GetFullPath(c) != Path.GetFullPath(path));
+    }
+
+    private void UseSchema(string? schemaPath, bool remember)
+    {
+        _schema = null;
+        _schemaPath = null;
+        if (schemaPath != null)
+        {
+            try
+            {
+                _schema = JsonSchema.Parse(File.ReadAllText(schemaPath));
+                _schemaPath = schemaPath;
+            }
+            catch (Exception e) when (e is IOException or FormatException or UnauthorizedAccessException)
+            {
+                ShowError($"Couldn't use {Path.GetFileName(schemaPath)} as a schema.\n\n{e.Message}");
+            }
+        }
+        if (remember && _path != null)
+            LayoutStore.SaveSchema(_path, _schemaPath == null ? null : Path.GetFullPath(_schemaPath));
+
+        _canvas.Schema = _schema;
+        _canvas.Refresh();
+        Validate();
+    }
+
+    private void Validate()
+    {
+        _problems = _schema != null && _editor != null ? _schema.Validate(_editor.Document) : Array.Empty<SchemaProblem>();
+        _nextProblem = Math.Min(_nextProblem, Math.Max(0, _problems.Count - 1));
+        _canvas.ShowProblems(_problems);
         UpdateChrome();
+    }
+
+    /// <summary>Shows the next schema problem on the canvas, going round to the first after the last.</summary>
+    private void NextProblem()
+    {
+        if (_problems.Count == 0)
+            return;
+        var problem = _problems[_nextProblem++ % _problems.Count];
+        _nextProblem %= _problems.Count;
+        _canvas.FocusNode(problem.Node);
+        _tree.SelectNode(problem.Node);
+        _status.Text = $"  {problem.Message}";
     }
 
     private void Save()
@@ -270,7 +388,7 @@ public partial class Main : Control
         _tree.QueueRebuild();
         _text.DocumentChanged();
         _search.DocumentChanged();
-        UpdateChrome();
+        Validate();
     }
 
     private void UpdateChrome()
@@ -287,7 +405,19 @@ public partial class Main : Control
         var doc = _editor?.Document;
         _status.Text = doc == null
             ? "  Start a new file, open a .json, .xml, .cfg or .ini file, or drop one on the window."
-            : $"  {doc.Format.ToString().ToUpperInvariant()}  ·  {_canvas.CardCount} cards  ·  {doc.Root.Descendants().Count()} nodes  ·  {_path ?? "not saved yet"}  ·  {(dirty ? "Unsaved" : "Saved")}";
+            : $"  {doc.Format.ToString().ToUpperInvariant()}  ·  {_canvas.CardCount} cards  ·  {doc.Root.Descendants().Count()} nodes  ·  {_path ?? "not saved yet"}  ·  {(dirty ? "Unsaved" : "Saved")}"
+              + (_schemaPath == null ? "" : $"  ·  Schema: {Path.GetFileName(_schemaPath)}");
+        _problemsButton.Visible = _schema != null;
+        _problemsButton.Text = _problems.Count switch
+        {
+            0 => "No problems",
+            1 => "1 problem ▸",
+            var n => $"{n} problems ▸",
+        };
+        _problemsButton.TooltipText = _problems.Count == 0 ? "The file matches its schema" : "Show the next problem (F8)";
+        _problemsButton.RemoveThemeColorOverride("font_color");
+        if (_problems.Count > 0)
+            _problemsButton.AddThemeColorOverride("font_color", Palette.Error);
     }
 
     private void ConfirmDiscard(Action then)

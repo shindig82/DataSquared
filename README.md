@@ -41,6 +41,15 @@ and the file as text on the right.
   header to move it. Only what the format allows is offered (INI can't nest, for example).
 - **Edit as text**: type in the text pane, then Apply (Ctrl+Enter). If it doesn't parse, it says
   where. Refresh throws the typing away.
+- **Schemas**: check a file against a [JSON Schema](https://json-schema.org/). DataSquared picks one
+  up by itself when it sits beside the file as `server.schema.json` or `server.cfg.schema.json`, or
+  when a JSON file names one in `"$schema"`. *Schema* on the toolbar picks another, which is
+  remembered for that file. Rows that break it get a ⚠ (hover it for why), the status bar counts the
+  problems, and F8 jumps from one to the next. Values the schema lists in an `enum` get a dropdown,
+  and its `description`s show as tooltips where the file has no comment. The schema works on INI
+  and XML too: sections and elements are objects, and keys and attributes are their properties.
+  [`server.schema.json`](tests/DataSquared.Core.Tests/Fixtures/server.schema.json) is an example for
+  Fleetborne's server.cfg.
 - **Find**: Ctrl+F searches keys and values. Enter and Shift+Enter step through matches.
 - **Undo**: Ctrl+Z, and Ctrl+Y or Ctrl+Shift+Z to redo. Typing into one value undoes as one step.
 - **Layout**: drag cards anywhere, collapse a card with its ▾ button, *Auto layout* (Ctrl+L) to

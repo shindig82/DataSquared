@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using DataSquared.Core.Editing;
 using DataSquared.Core.Model;
+using DataSquared.Core.Schema;
 using Godot;
 
 namespace DataSquared;
@@ -45,7 +46,9 @@ public partial class GraphCanvas : GraphEdit
     private readonly Dictionary<DocNode, GraphNode> _cards = new();
     private readonly Dictionary<long, DocNode> _ids = new();
     private readonly Dictionary<GraphNode, string> _builtPaths = new();
-    private readonly Dictionary<DocNode, Control> _rows = new();
+    private readonly Dictionary<DocNode, CardRow> _rows = new();
+    private readonly Dictionary<DocNode, CardRow> _summaries = new();
+    private IReadOnlyList<SchemaProblem> _problems = Array.Empty<SchemaProblem>();
     private readonly HashSet<DocNode> _collapsed = new();
     // Where every card has been, including ones hidden by collapsing, so they come back to the same place.
     private readonly Dictionary<DocNode, Vector2> _known = new();
@@ -77,6 +80,9 @@ public partial class GraphCanvas : GraphEdit
             Refresh();
         }
     }
+
+    /// <summary>The schema the document is checked against. It also gives rows their dropdowns and descriptions.</summary>
+    public JsonSchema? Schema { get; set; }
 
     /// <summary>Every change made on a card goes through this, so it can be undone.</summary>
     public DocumentEditor? Editor { get; set; }
@@ -165,8 +171,11 @@ public partial class GraphCanvas : GraphEdit
         ScrollOffset = card.PositionOffset * Zoom - (Size - card.Size * Zoom) / 2;
 
         // Flash the row itself, so a match in a long card is easy to spot.
-        if (_rows.TryGetValue(node, out var row))
+        if (_rows.TryGetValue(node, out var row) && row.IsInsideTree())
         {
+            // Center on the row rather than the card, so it's in view in a tall card too.
+            var center = card.PositionOffset + new Vector2(card.Size.X / 2, row.Position.Y + row.Size.Y / 2);
+            ScrollOffset = center * Zoom - Size / 2;
             row.Modulate = new Color(1.8f, 1.6f, 0.6f);
             CreateTween().TweenProperty(row, "modulate", Colors.White, 1.2);
         }
@@ -357,6 +366,23 @@ public partial class GraphCanvas : GraphEdit
         }
 
         RestoreView(saved?.Zoom ?? 1, saved?.Scroll ?? new Vector2(-40, -80));
+        ShowProblems(_problems);
+    }
+
+    /// <summary>Marks the rows and cards whose nodes break the schema. Kept, and shown again after each rebuild.</summary>
+    public void ShowProblems(IReadOnlyList<SchemaProblem> problems)
+    {
+        _problems = problems;
+        foreach (var row in _rows.Values.Concat(_summaries.Values))
+            row.SetProblem(null);
+        foreach (var group in problems.GroupBy(p => p.Node))
+        {
+            var message = string.Join("\n", group.Select(p => p.Message));
+            if (_rows.TryGetValue(group.Key, out var row))
+                row.SetProblem(message);
+            if (_summaries.TryGetValue(group.Key, out var summary))
+                summary.SetProblem(message);
+        }
     }
 
     /// <summary>
@@ -384,6 +410,7 @@ public partial class GraphCanvas : GraphEdit
             if ((heights.TryGetValue(node, out var before) || heightsByPath.TryGetValue(_builtPaths[card], out before)) && card.Size.Y > before)
                 PushDown(card, before);
         RestoreView(zoom, scroll);
+        ShowProblems(_problems);
 
         void PlaceCard(DocNode node)
         {
@@ -503,6 +530,7 @@ public partial class GraphCanvas : GraphEdit
         _ids.Clear();
         _builtPaths.Clear();
         _rows.Clear();
+        _summaries.Clear();
     }
 
     private GraphNode BuildCard(DocNode node, string? title = null)
@@ -512,7 +540,7 @@ public partial class GraphCanvas : GraphEdit
             Name = $"card{_nextCardId++}",
             Title = title ?? CardTitle(node),
             CustomMinimumSize = new Vector2(CardWidth, 0),
-            TooltipText = node.Comment,
+            TooltipText = Hint(node),
             Resizable = false,
         };
         var collapsed = _collapsed.Contains(node);
@@ -540,6 +568,7 @@ public partial class GraphCanvas : GraphEdit
 
         // Row 0 is the summary, and takes the incoming connection from the parent card.
         var summary = new CardRow(this, node, isHeader: true);
+        _summaries[node] = summary;
         summary.Line.AddChild(new Label { Text = Summary(node), Modulate = new Color(1, 1, 1, 0.55f) });
         if (ShowComments)
             summary.ShowComment(node.Comment, CardWidth - 24);
@@ -550,7 +579,7 @@ public partial class GraphCanvas : GraphEdit
         foreach (var child in collapsed ? Enumerable.Empty<DocNode>() : node.Children)
         {
             var row = child.IsContainer ? ContainerRow(child) : ValueRow(child);
-            row.TooltipText = child.Comment;
+            row.TooltipText = Hint(child);
             if (ShowComments)
                 row.ShowComment(child.Comment, CardWidth - 24);
             card.AddChild(row);
@@ -594,6 +623,12 @@ public partial class GraphCanvas : GraphEdit
     private CardRow ValueRow(DocNode value)
     {
         var row = NewRow(value);
+
+        if (value.ValueKind != ValueKind.Boolean && Editor != null && Schema?.ChoicesFor(Editor.Document, value) is { Count: > 0 } choices)
+        {
+            row.Line.AddChild(ChoiceBox(value, choices));
+            return row;
+        }
 
         switch (value.ValueKind)
         {
@@ -642,6 +677,32 @@ public partial class GraphCanvas : GraphEdit
 
         return row;
     }
+
+    /// <summary>A dropdown of the values the schema allows. A value the file has that isn't one of them is listed too, so it shows.</summary>
+    private OptionButton ChoiceBox(DocNode value, IReadOnlyList<string> choices)
+    {
+        var box = new OptionButton { SizeFlagsHorizontal = SizeFlags.ExpandFill, FitToLongestItem = false };
+        box.AddThemeColorOverride("font_color", Palette.KindColor(value));
+        var items = choices.Contains(value.Text) ? choices : choices.Prepend(value.Text).ToList();
+        foreach (var item in items)
+            box.AddItem(item.Length == 0 ? "(empty)" : item);
+        box.Selected = items.ToList().IndexOf(value.Text);
+        box.ItemSelected += i =>
+        {
+            var text = items[(int)i];
+            if (DocumentEditor.ValidateValue(value, text) is { } error)
+                Problem?.Invoke(error);
+            else
+                Editor?.SetValue(value, text);
+        };
+        return box;
+    }
+
+    /// <summary>A node's tooltip: its comment from the file, or failing that, what the schema says about it.</summary>
+    private string Hint(DocNode node) =>
+        node.Comment is { Length: > 0 } comment ? comment
+        : Editor != null && Schema?.DescriptionOf(Editor.Document, node) is { } description ? description
+        : "";
 
     private Label KeyLabel(DocNode node)
     {
